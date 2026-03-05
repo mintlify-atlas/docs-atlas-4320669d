@@ -1,0 +1,123 @@
+{
+  "projectType": "saas",
+  "projectName": "S-Parking",
+  "projectDescription": "Smart parking management platform with IoT sensors, real-time monitoring, and cloud-native serverless architecture.",
+  "theme": "aspen",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/real-time-monitoring",
+              "features/reservation-system",
+              "features/zone-management",
+              "features/analytics-dashboard"
+            ]
+          },
+          {
+            "group": "Hardware & IoT",
+            "pages": [
+              "hardware/overview",
+              "hardware/esp32-setup",
+              "hardware/sensor-calibration",
+              "hardware/led-indicators"
+            ]
+          },
+          {
+            "group": "Backend & Cloud",
+            "pages": [
+              "backend/cloud-architecture",
+              "backend/firestore-schema",
+              "backend/cloud-functions",
+              "backend/authentication"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "frontend/dashboard",
+              "frontend/map-integration",
+              "frontend/builder-mode",
+              "frontend/performance-optimizations"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/cloud-run",
+              "deployment/firebase-hosting",
+              "deployment/firmware-flashing",
+              "deployment/environment-config"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Cloud Functions",
+            "pages": [
+              "api/ingest-parking-data",
+              "api/get-parking-status",
+              "api/reserve-parking-spot",
+              "api/release-parking-spot",
+              "api/create-parking-spot",
+              "api/delete-parking-spot",
+              "api/manage-zones",
+              "api/get-zones",
+              "api/get-occupancy-history",
+              "api/save-hourly-snapshot"
+            ]
+          },
+          {
+            "group": "Frontend APIs",
+            "pages": [
+              "api/frontend/parking-api",
+              "api/frontend/zones-api",
+              "api/frontend/history-api"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time parking spot monitoring with <2s latency",
+    "ESP32-based IoT sensors with self-healing capabilities",
+    "Cloud-native serverless architecture on Google Cloud Platform",
+    "Visual zone builder with drag-and-drop parking spot creation",
+    "Reservation system with automatic expiration handling",
+    "Analytics dashboard with occupancy trends and peak hours",
+    "Multi-layer caching with Page Visibility API optimization",
+    "Firebase Authentication with custom claims",
+    "Firestore real-time database with historical snapshots",
+    "LED visual feedback system (RGB indicators)"
+  ],
+  "publicApiSurface": [
+    "POST /ingest-parking-data - Ingest sensor data from ESP32 devices",
+    "GET /get-parking-status - Fetch current status of all parking spots",
+    "POST /reserve-parking-spot - Reserve a parking spot with duration",
+    "POST /release-parking-spot - Release a reserved parking spot",
+    "POST /create-parking-spot - Create a new parking spot",
+    "DELETE /delete-parking-spot - Delete an existing parking spot",
+    "POST /manage-zones - Create, update, or delete parking zones",
+    "GET /get-zones - Fetch all parking zones",
+    "GET /get-occupancy-history - Retrieve historical occupancy data",
+    "POST /save-hourly-snapshot - Trigger hourly snapshot generation"
+  ]
+}
