@@ -1,0 +1,570 @@
+---
+title: 'History API'
+description: 'Client-side API functions for fetching occupancy history and analytics'
+icon: 'chart-line'
+---
+
+## Overview
+
+The History API provides functions to fetch occupancy history data and perform analytics calculations. It includes 10-minute caching to reduce costs and supports both global and zone-specific queries.
+
+## Import
+
+```javascript
+import { 
+  fetchOccupancyHistory,
+  extractGlobalOccupancy,
+  extractZoneOccupancy,
+  aggregateGlobalFromZones,
+  calculateTrend,
+  getLatestSnapshot,
+  invalidateCache
+} from './js/api/history.js';
+```
+
+## Caching Behavior
+
+The History API uses memory caching with a 10-minute TTL to minimize Cloud Function invocations:
+
+- **Cache Key**: Combination of `days` and `zoneId` parameters
+- **Cache Duration**: 600,000ms (10 minutes)
+- **No localStorage**: History data is not persisted locally
+
+---
+
+## fetchOccupancyHistory
+
+Fetches historical occupancy data from the server.
+
+### Function Signature
+
+```javascript
+async function fetchOccupancyHistory(
+  days: number = 1,
+  zoneId: string | null = null
+): Promise<HistoryResponse>
+```
+
+### Parameters
+
+<ParamField path="days" type="number" default="1">
+  Number of days of history to fetch (1-30)
+</ParamField>
+
+<ParamField path="zoneId" type="string | null" default="null">
+  Optional zone ID to filter results. If `null`, returns global data for all zones.
+</ParamField>
+
+### Returns
+
+<ResponseField name="response" type="object">
+  History response object
+  
+  <ResponseField name="success" type="boolean">
+    Whether the request succeeded
+  </ResponseField>
+  
+  <ResponseField name="days" type="number">
+    Number of days requested
+  </ResponseField>
+  
+  <ResponseField name="count" type="number">
+    Number of samples returned
+  </ResponseField>
+  
+  <ResponseField name="samples" type="array">
+    Array of occupancy snapshot objects
+    
+    <ResponseField name="timestamp" type="string">
+      ISO 8601 timestamp of the snapshot
+    </ResponseField>
+    
+    <ResponseField name="global" type="object" optional>
+      Global occupancy statistics (when zoneId is null)
+      
+      <ResponseField name="occupancyPct" type="number">
+        Overall occupancy percentage (0-100)
+      </ResponseField>
+      
+      <ResponseField name="occupied" type="number">
+        Number of occupied spots
+      </ResponseField>
+      
+      <ResponseField name="reserved" type="number">
+        Number of reserved spots
+      </ResponseField>
+      
+      <ResponseField name="available" type="number">
+        Number of available spots
+      </ResponseField>
+      
+      <ResponseField name="total" type="number">
+        Total number of spots
+      </ResponseField>
+    </ResponseField>
+    
+    <ResponseField name="zone" type="object" optional>
+      Zone-specific statistics (when zoneId is provided)
+      
+      <ResponseField name="occupancyPct" type="number">
+        Zone occupancy percentage (0-100)
+      </ResponseField>
+      
+      <ResponseField name="occupied" type="number">
+        Number of occupied spots in zone
+      </ResponseField>
+      
+      <ResponseField name="reserved" type="number">
+        Number of reserved spots in zone
+      </ResponseField>
+      
+      <ResponseField name="available" type="number">
+        Number of available spots in zone
+      </ResponseField>
+      
+      <ResponseField name="total" type="number">
+        Total number of spots in zone
+      </ResponseField>
+    </ResponseField>
+    
+    <ResponseField name="zones_summary" type="array" optional>
+      Per-zone breakdown (when zoneId is null)
+      
+      <ResponseField name="id" type="string">
+        Zone ID
+      </ResponseField>
+      
+      <ResponseField name="occupancyPct" type="number">
+        Zone occupancy percentage
+      </ResponseField>
+      
+      <ResponseField name="occupied" type="number">
+        Occupied spots in zone
+      </ResponseField>
+      
+      <ResponseField name="reserved" type="number">
+        Reserved spots in zone
+      </ResponseField>
+      
+      <ResponseField name="total" type="number">
+        Total spots in zone
+      </ResponseField>
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+### Cache Behavior
+
+1. **Cache hit**: Returns cached data if less than 10 minutes old and cache key matches
+2. **API call**: Fetches from hardcoded Cloud Function URL and updates cache
+3. **Failure**: Returns `{ success: false, days, count: 0, samples: [] }` on error
+
+### Usage Examples
+
+<Tabs>
+  <Tab title="Global History">
+    ```javascript
+    import { fetchOccupancyHistory } from './js/api/history.js';
+
+    // Fetch 7 days of global occupancy data
+    const history = await fetchOccupancyHistory(7);
+    
+    if (history.success) {
+      console.log(`Loaded ${history.count} samples`);
+      
+      history.samples.forEach(sample => {
+        const timestamp = new Date(sample.timestamp);
+        const occupancy = sample.global.occupancyPct;
+        console.log(`${timestamp.toLocaleString()}: ${occupancy}% occupied`);
+      });
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Zone History">
+    ```javascript
+    import { fetchOccupancyHistory } from './js/api/history.js';
+
+    // Fetch 1 day of data for specific zone
+    const history = await fetchOccupancyHistory(1, 'zone_vip');
+    
+    if (history.success) {
+      const avgOccupancy = history.samples.reduce(
+        (sum, s) => sum + (s.zone?.occupancyPct || 0), 0
+      ) / history.count;
+      
+      console.log(`Average VIP zone occupancy: ${avgOccupancy.toFixed(1)}%`);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="With Error Handling">
+    ```javascript
+    import { fetchOccupancyHistory } from './js/api/history.js';
+
+    try {
+      const history = await fetchOccupancyHistory(30);
+      
+      if (!history.success || history.count === 0) {
+        console.warn('No history data available');
+        return;
+      }
+      
+      // Process data
+      console.log(`Loaded ${history.count} samples over ${history.days} days`);
+    } catch (error) {
+      console.error('Failed to fetch history:', error);
+      // Show error message to user
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Analytics Functions
+
+### extractGlobalOccupancy
+
+Extracts global occupancy percentages from history samples.
+
+```javascript
+function extractGlobalOccupancy(samples: Array<Sample>): Array<number>
+```
+
+**Parameters:**
+
+<ParamField path="samples" type="array" required>
+  Array of history samples from `fetchOccupancyHistory`
+</ParamField>
+
+**Returns:**
+
+Array of occupancy percentages (0-100) in chronological order.
+
+**Example:**
+
+```javascript
+import { fetchOccupancyHistory, extractGlobalOccupancy } from './js/api/history.js';
+
+const history = await fetchOccupancyHistory(7);
+const occupancyData = extractGlobalOccupancy(history.samples);
+
+// Use for charting
+renderLineChart(occupancyData);
+```
+
+---
+
+### extractZoneOccupancy
+
+Extracts occupancy percentages for a specific zone.
+
+```javascript
+function extractZoneOccupancy(
+  samples: Array<Sample>,
+  zoneId: string
+): Array<number>
+```
+
+**Parameters:**
+
+<ParamField path="samples" type="array" required>
+  Array of history samples
+</ParamField>
+
+<ParamField path="zoneId" type="string" required>
+  Zone ID to extract data for
+</ParamField>
+
+**Returns:**
+
+Array of occupancy percentages for the specified zone. Returns `0` for samples where zone data is unavailable.
+
+**Example:**
+
+```javascript
+import { fetchOccupancyHistory, extractZoneOccupancy } from './js/api/history.js';
+
+const history = await fetchOccupancyHistory(7);
+const vipOccupancy = extractZoneOccupancy(history.samples, 'zone_vip');
+const generalOccupancy = extractZoneOccupancy(history.samples, 'zone_general');
+
+// Compare zones
+renderMultiLineChart({
+  'VIP': vipOccupancy,
+  'General': generalOccupancy
+});
+```
+
+---
+
+### aggregateGlobalFromZones
+
+Calculates weighted average global occupancy from per-zone data.
+
+```javascript
+function aggregateGlobalFromZones(samples: Array<Sample>): Array<number>
+```
+
+**Parameters:**
+
+<ParamField path="samples" type="array" required>
+  Array of history samples with `zones_summary` data
+</ParamField>
+
+**Returns:**
+
+Array of aggregated global occupancy percentages, weighted by zone capacity.
+
+**Behavior:**
+
+- Filters out placeholder zones (e.g., 'SinZona')
+- Weights occupancy by total capacity of each zone
+- Falls back to `sample.global.occupancyPct` if zone data unavailable
+
+**Example:**
+
+```javascript
+import { 
+  fetchOccupancyHistory, 
+  extractGlobalOccupancy,
+  aggregateGlobalFromZones 
+} from './js/api/history.js';
+
+const history = await fetchOccupancyHistory(7);
+
+// Compare API global vs calculated global
+const apiGlobal = extractGlobalOccupancy(history.samples);
+const calcGlobal = aggregateGlobalFromZones(history.samples);
+
+const diff = Math.abs(apiGlobal[0] - calcGlobal[0]);
+if (diff > 5) {
+  console.warn('Global occupancy mismatch detected');
+}
+```
+
+---
+
+### calculateTrend
+
+Calculates percentage change between first and last data points.
+
+```javascript
+function calculateTrend(data: Array<number>): number
+```
+
+**Parameters:**
+
+<ParamField path="data" type="array" required>
+  Array of numeric values (e.g., occupancy percentages)
+</ParamField>
+
+**Returns:**
+
+Percentage change rounded to nearest integer. Returns `0` if data has fewer than 2 points.
+
+**Example:**
+
+```javascript
+import { 
+  fetchOccupancyHistory, 
+  extractGlobalOccupancy,
+  calculateTrend 
+} from './js/api/history.js';
+
+const history = await fetchOccupancyHistory(30);
+const occupancyData = extractGlobalOccupancy(history.samples);
+const trend = calculateTrend(occupancyData);
+
+if (trend > 0) {
+  console.log(`Occupancy increased by ${trend}% over 30 days`);
+} else if (trend < 0) {
+  console.log(`Occupancy decreased by ${Math.abs(trend)}% over 30 days`);
+} else {
+  console.log('Occupancy remained stable');
+}
+```
+
+---
+
+### getLatestSnapshot
+
+Returns the most recent snapshot from history samples.
+
+```javascript
+function getLatestSnapshot(samples: Array<Sample>): Sample | null
+```
+
+**Parameters:**
+
+<ParamField path="samples" type="array" required>
+  Array of history samples
+</ParamField>
+
+**Returns:**
+
+The last sample in the array, or `null` if array is empty.
+
+**Example:**
+
+```javascript
+import { fetchOccupancyHistory, getLatestSnapshot } from './js/api/history.js';
+
+const history = await fetchOccupancyHistory(7);
+const latest = getLatestSnapshot(history.samples);
+
+if (latest) {
+  const timestamp = new Date(latest.timestamp);
+  const occupancy = latest.global.occupancyPct;
+  console.log(`Latest snapshot from ${timestamp}: ${occupancy}% occupied`);
+}
+```
+
+---
+
+### invalidateCache
+
+Manually invalidates the history cache to force a fresh API call.
+
+```javascript
+function invalidateCache(): void
+```
+
+**Example:**
+
+```javascript
+import { invalidateCache, fetchOccupancyHistory } from './js/api/history.js';
+
+// Force refresh after data update
+invalidateCache();
+const freshHistory = await fetchOccupancyHistory(7);
+```
+
+---
+
+## Complete Analytics Example
+
+```javascript
+import { 
+  fetchOccupancyHistory,
+  extractGlobalOccupancy,
+  extractZoneOccupancy,
+  calculateTrend,
+  getLatestSnapshot
+} from './js/api/history.js';
+import { fetchZones } from './js/api/zones.js';
+
+async function generateOccupancyReport(days = 7) {
+  // Fetch data
+  const [history, zones] = await Promise.all([
+    fetchOccupancyHistory(days),
+    fetchZones()
+  ]);
+  
+  if (!history.success) {
+    console.error('Failed to load history');
+    return;
+  }
+  
+  // Global analytics
+  const globalData = extractGlobalOccupancy(history.samples);
+  const globalTrend = calculateTrend(globalData);
+  const latest = getLatestSnapshot(history.samples);
+  
+  console.log('=== Global Occupancy Report ===');
+  console.log(`Period: ${days} days (${history.count} samples)`);
+  console.log(`Current: ${latest?.global.occupancyPct}%`);
+  console.log(`Trend: ${globalTrend > 0 ? '+' : ''}${globalTrend}%`);
+  console.log();
+  
+  // Per-zone analytics
+  console.log('=== Zone Breakdown ===');
+  for (const zone of zones) {
+    const zoneData = extractZoneOccupancy(history.samples, zone.id);
+    const zoneTrend = calculateTrend(zoneData);
+    const avgOccupancy = zoneData.reduce((a, b) => a + b, 0) / zoneData.length;
+    
+    console.log(`${zone.name}:`);
+    console.log(`  Average: ${avgOccupancy.toFixed(1)}%`);
+    console.log(`  Trend: ${zoneTrend > 0 ? '+' : ''}${zoneTrend}%`);
+  }
+}
+
+// Run report
+await generateOccupancyReport(30);
+```
+
+---
+
+## API Endpoint
+
+The history data is fetched from:
+
+```
+https://southamerica-west1-s-parking-476007.cloudfunctions.net/get-occupancy-history
+```
+
+**Query Parameters:**
+- `days`: Number of days (1-30)
+- `zoneId`: Optional zone filter
+
+**Note**: This URL is hardcoded in the module and not configurable via `CONFIG` object.
+
+---
+
+## Performance Considerations
+
+### Cache Strategy
+
+The 10-minute cache duration is optimized for cost reduction:
+
+- **Cloud Function invocations**: Expensive, limited by quota
+- **Cache duration**: Long enough to reduce costs, short enough for reasonable freshness
+- **Cache per query**: Each unique `(days, zoneId)` pair has its own cache entry
+
+### Best Practices
+
+```javascript
+import { fetchOccupancyHistory, invalidateCache } from './js/api/history.js';
+
+// Good: Reuse cached data
+const history1 = await fetchOccupancyHistory(7); // API call
+const history2 = await fetchOccupancyHistory(7); // Cache hit (same params)
+
+// Bad: Different parameters = new API call
+const history3 = await fetchOccupancyHistory(1); // API call (different days)
+
+// Invalidate only when necessary
+invalidateCache(); // Force refresh on next call
+const fresh = await fetchOccupancyHistory(7); // API call
+```
+
+---
+
+## Error Handling
+
+The History API returns graceful fallbacks on error:
+
+```javascript
+import { fetchOccupancyHistory } from './js/api/history.js';
+
+const history = await fetchOccupancyHistory(7);
+
+// Always check success flag
+if (!history.success) {
+  console.error('Failed to fetch history');
+  console.log('Fallback values:', history);
+  // { success: false, days: 7, count: 0, samples: [] }
+  return;
+}
+
+// Check for empty results
+if (history.count === 0) {
+  console.warn('No history data available for this period');
+  return;
+}
+
+// Safe to use data
+processHistoryData(history.samples);
+```

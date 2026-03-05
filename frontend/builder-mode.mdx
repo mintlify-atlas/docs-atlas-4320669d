@@ -1,0 +1,479 @@
+---
+title: 'Visual Builder Mode'
+description: 'Interactive tool for creating parking spot layouts with grid and line modes'
+icon: 'pencil-ruler'
+---
+
+## Overview
+
+The Visual Builder is an admin-only tool that enables rapid creation of parking spot layouts directly on the map. It supports two modes:
+- **Line Mode**: Draw a line to create evenly-spaced spots
+- **Grid Mode**: Click to create individual spots
+
+## Activation
+
+Builder mode is toggled via the admin toolbar:
+
+```javascript main.js
+const builderToggle = document.getElementById('builder-mode-toggle');
+builderToggle.addEventListener('change', (e) => {
+    state.isBuilderMode = e.target.checked;
+    MapBuilder.toggleLineBuilder(e.target.checked);
+    
+    if (e.target.checked) {
+        UI_Toasts.showToast('Modo Builder activado', 'info');
+    } else {
+        UI_Toasts.showToast('Modo Builder desactivado', 'info');
+    }
+});
+```
+
+<Tip>
+Builder mode requires admin authentication. The toggle is only visible when `state.isAdminMode === true`.
+</Tip>
+
+## Line Builder: Two-Click Workflow
+
+The line builder creates multiple spots along a straight line between two points.
+
+### Step 1: First Click (Start Point)
+
+```javascript map/builder.js
+let isBuilding = false;
+let startPoint = null;
+let ghostMarkers = [];
+
+export function handleMapClick(latLng) {
+    if (!isBuilding || !mapState.map) return;
+
+    if (!startPoint) {
+        // First click: set start point
+        startPoint = latLng;
+        
+        // Visual feedback: blue dot at start
+        const pinDiv = document.createElement('div');
+        pinDiv.className = 'w-4 h-4 bg-blue-500 rounded-full border-2 border-white';
+        
+        const startMarker = new mapState.AdvancedMarkerElement({
+            map: mapState.map,
+            position: startPoint,
+            content: pinDiv
+        });
+        ghostMarkers.push(startMarker);
+        
+        showToast("Selecciona el punto final de la línea", "info");
+    } else {
+        // Second click: return both points
+        return { start: startPoint, end: latLng };
+    }
+}
+```
+
+### Step 2: Second Click (End Point)
+
+When the second point is clicked, `main.js` receives the result and opens a configuration panel:
+
+```javascript main.js
+function showLineBuilderConfig(start, end) {
+    const modal = document.getElementById('builder-config-modal');
+    
+    // Pre-fill with defaults
+    document.getElementById('builder-prefix').value = 'A-';
+    document.getElementById('builder-count').value = '10';
+    document.getElementById('builder-start-num').value = '1';
+    
+    // Preview the line
+    MapBuilder.previewLine(start, end, 10);
+    
+    // Open modal
+    UI_Modals.openModal('builder-config-modal');
+}
+```
+
+### Step 3: Preview Rendering
+
+As the user adjusts the count slider, ghost markers update in real-time:
+
+```javascript map/builder.js
+export function previewLine(start, end, count) {
+    clearGhosts();
+
+    // Draw directional line
+    previewPolyline = new google.maps.Polyline({
+        map: mapState.map,
+        path: [start, end],
+        strokeColor: '#3b82f6',
+        strokeOpacity: 0.5,
+        strokeWeight: 2,
+        icons: [{
+            icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW },
+            offset: '100%'
+        }]
+    });
+
+    // Calculate interpolated positions
+    const spherical = google.maps.geometry.spherical;
+    const distance = spherical.computeDistanceBetween(start, end);
+    const heading = spherical.computeHeading(start, end);
+    const step = distance / (count - 1 || 1);
+
+    for (let i = 0; i < count; i++) {
+        const pos = spherical.computeOffset(start, i * step, heading);
+        
+        // Semi-transparent ghost marker
+        const div = document.createElement('div');
+        div.className = 'w-3 h-3 bg-blue-300 rounded-full opacity-50';
+        
+        const marker = new mapState.AdvancedMarkerElement({
+            map: mapState.map,
+            position: pos,
+            content: div
+        });
+        ghostMarkers.push(marker);
+    }
+}
+```
+
+<Card title="Geometry Library" icon="ruler">
+The `google.maps.geometry.spherical` library provides:
+- `computeDistanceBetween()`: Great-circle distance in meters
+- `computeHeading()`: Bearing from point A to point B
+- `computeOffset()`: New point at distance + heading
+</Card>
+
+### Step 4: Batch Creation
+
+When the user confirms, spots are created via API:
+
+```javascript map/builder.js
+export async function executeBatchCreate(start, end, config) {
+    // config = { count, prefix, startNum }
+    const spherical = google.maps.geometry.spherical;
+    const distance = spherical.computeDistanceBetween(start, end);
+    const heading = spherical.computeHeading(start, end);
+    const step = distance / (config.count - 1 || 1);
+
+    let createdCount = 0;
+
+    for (let i = 0; i < config.count; i++) {
+        const pos = spherical.computeOffset(start, i * step, heading);
+        
+        // Generate ID: A-01, A-02, ..., A-10
+        const num = parseInt(config.startNum) + i;
+        const id = `${config.prefix}${num.toString().padStart(2, '0')}`;
+        
+        await createSpot({
+            id: id,
+            lat: pos.lat(),
+            lng: pos.lng(),
+            desc: `Puesto ${id}`
+        });
+        
+        createdCount++;
+    }
+
+    resetBuilder();
+    return createdCount;
+}
+```
+
+## Configuration Panel UI
+
+```html builder-modal.html
+<div id="builder-config-modal" class="modal hidden">
+    <div class="modal-content">
+        <h2>Configurar Línea de Puestos</h2>
+        
+        <label>
+            Prefijo (ej. "A-", "B-")
+            <input type="text" id="builder-prefix" value="A-" />
+        </label>
+        
+        <label>
+            Cantidad de Puestos
+            <input type="range" id="builder-count" min="2" max="50" value="10" />
+            <span id="builder-count-display">10</span>
+        </label>
+        
+        <label>
+            Número Inicial
+            <input type="number" id="builder-start-num" value="1" min="1" />
+        </label>
+        
+        <div class="preview-summary">
+            IDs: <span id="builder-id-preview">A-01 ... A-10</span>
+        </div>
+        
+        <div class="modal-actions">
+            <button id="builder-cancel" class="btn-secondary">Cancelar</button>
+            <button id="builder-confirm" class="btn-primary">Crear Puestos</button>
+        </div>
+    </div>
+</div>
+```
+
+### Real-Time Preview Updates
+
+```javascript main.js
+const countSlider = document.getElementById('builder-count');
+const countDisplay = document.getElementById('builder-count-display');
+const previewSpan = document.getElementById('builder-id-preview');
+
+countSlider.addEventListener('input', (e) => {
+    const count = parseInt(e.target.value);
+    countDisplay.textContent = count;
+    
+    // Update ghost markers
+    MapBuilder.previewLine(builderStart, builderEnd, count);
+    
+    // Update ID preview
+    const prefix = document.getElementById('builder-prefix').value;
+    const startNum = parseInt(document.getElementById('builder-start-num').value);
+    const endNum = startNum + count - 1;
+    previewSpan.textContent = `${prefix}${String(startNum).padStart(2, '0')} ... ${prefix}${String(endNum).padStart(2, '0')}`;
+});
+```
+
+## Grid Mode: Single Spot Creation
+
+When builder mode is OFF but admin mode is ON, clicking the map creates a single spot:
+
+```javascript main.js
+function createSingleSpot(latLng) {
+    const lat = latLng.lat();
+    const lng = latLng.lng();
+    
+    // Show draggable preview
+    MapAdmin.createPreviewSpotAt({ lat: () => lat, lng: () => lng }, 
+        async (finalPos) => {
+            // User accepted: open creation modal
+            window.currentAdminSpotId = null;
+            
+            document.getElementById('modal-admin-spot-id').innerText = 'Nuevo';
+            document.getElementById('admin-spot-id-input').value = '';
+            document.getElementById('admin-spot-lat-input').value = finalPos.lat;
+            document.getElementById('admin-spot-lng-input').value = finalPos.lng;
+            document.getElementById('admin-spot-status-input').value = 1;
+            
+            const zoneSelect = document.getElementById('admin-spot-zone-input');
+            zoneSelect.innerHTML = '<option value="">Sin asignar</option>' + 
+                state.zones.map(z => `<option value="${z.id}">${z.name}</option>`).join('');
+            
+            UI_Modals.openModal('modal-edit-spot-admin');
+        },
+        () => {
+            // User cancelled: preview removed
+        }
+    );
+}
+```
+
+### Draggable Preview
+
+The `MapAdmin.createPreviewSpotAt()` function creates a temporary marker that can be repositioned:
+
+```javascript map/admin.js
+export function createPreviewSpotAt(latLng, onAccept, onCancel) {
+    const previewDiv = document.createElement('div');
+    previewDiv.className = 'parking-pin pin-preview';
+    previewDiv.style.opacity = '0.7';
+    
+    const previewMarker = new mapState.AdvancedMarkerElement({
+        map: mapState.map,
+        position: { lat: latLng.lat(), lng: latLng.lng() },
+        content: previewDiv,
+        gmpDraggable: true
+    });
+    
+    // Show confirmation overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'builder-preview-overlay';
+    overlay.innerHTML = `
+        <div class="preview-actions">
+            <button class="btn-accept">✓ Aceptar</button>
+            <button class="btn-cancel">✗ Cancelar</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    overlay.querySelector('.btn-accept').addEventListener('click', () => {
+        const finalPos = {
+            lat: previewMarker.position.lat,
+            lng: previewMarker.position.lng
+        };
+        previewMarker.map = null;
+        overlay.remove();
+        onAccept(finalPos);
+    });
+    
+    overlay.querySelector('.btn-cancel').addEventListener('click', () => {
+        previewMarker.map = null;
+        overlay.remove();
+        onCancel();
+    });
+}
+```
+
+## Ruler Tool (Distance Measurement)
+
+A bonus feature: measure distances between points for planning layouts.
+
+```javascript map/builder.js
+let rulerPoints = [];
+
+export function enableRulerMode() {
+    const mapElement = mapState.map.getDiv();
+    mapElement.style.cursor = 'crosshair';
+    
+    const clickListener = mapState.map.addListener('click', (e) => {
+        rulerPoints.push(e.latLng);
+        
+        if (rulerPoints.length === 2) {
+            const distance = google.maps.geometry.spherical
+                .computeDistanceBetween(rulerPoints[0], rulerPoints[1]);
+            
+            showToast(`Distancia: ${distance.toFixed(2)} metros`, 'info');
+            
+            // Draw line
+            new google.maps.Polyline({
+                map: mapState.map,
+                path: rulerPoints,
+                strokeColor: '#fbbf24',
+                strokeWeight: 3
+            });
+            
+            rulerPoints = [];
+            google.maps.event.removeListener(clickListener);
+            mapElement.style.cursor = 'default';
+        }
+    });
+}
+```
+
+## Cleanup & Reset
+
+```javascript map/builder.js
+function clearGhosts() {
+    ghostMarkers.forEach(m => m.map = null);
+    ghostMarkers = [];
+    
+    if (previewPolyline) {
+        previewPolyline.setMap(null);
+        previewPolyline = null;
+    }
+}
+
+function resetBuilder() {
+    startPoint = null;
+    clearGhosts();
+}
+
+export function toggleLineBuilder(enable) {
+    isBuilding = enable;
+    if (!enable) resetBuilder();
+}
+```
+
+<Tip>
+Always clean up markers and polylines to prevent memory leaks. Setting `map = null` removes them from the map.
+</Tip>
+
+## Keyboard Shortcuts
+
+Power users can use keyboard shortcuts:
+
+```javascript main.js
+document.addEventListener('keydown', (e) => {
+    if (!state.isAdminMode) return;
+    
+    // B = Toggle Builder
+    if (e.key === 'b' || e.key === 'B') {
+        const toggle = document.getElementById('builder-mode-toggle');
+        toggle.checked = !toggle.checked;
+        toggle.dispatchEvent(new Event('change'));
+    }
+    
+    // R = Ruler Mode
+    if (e.key === 'r' || e.key === 'R') {
+        MapBuilder.enableRulerMode();
+        UI_Toasts.showToast('Haz clic en dos puntos para medir', 'info');
+    }
+    
+    // ESC = Cancel builder
+    if (e.key === 'Escape') {
+        if (state.isBuilderMode) {
+            MapBuilder.resetBuilder();
+            UI_Toasts.showToast('Builder cancelado', 'info');
+        }
+    }
+});
+```
+
+## Best Practices
+
+<Card title="Naming Convention" icon="tag">
+Use zone-based prefixes: `A-01`, `B-01`, `C-01`
+
+This keeps spots organized and easy to find.
+</Card>
+
+<Card title="Line Direction" icon="arrow-right">
+Draw lines from **entrance to exit** for logical numbering.
+
+The arrow on the preview line shows direction.
+</Card>
+
+<Card title="Spacing Accuracy" icon="ruler-combined">
+For tight spots: **2.5m spacing**  
+For standard spots: **3.0m spacing**  
+For accessible spots: **3.5m+ spacing**
+
+Use the ruler tool to verify distances.
+</Card>
+
+## Error Handling
+
+```javascript map/builder.js
+export async function executeBatchCreate(start, end, config) {
+    try {
+        let createdCount = 0;
+        const errors = [];
+        
+        for (let i = 0; i < config.count; i++) {
+            try {
+                const pos = spherical.computeOffset(start, i * step, heading);
+                const id = `${config.prefix}${(config.startNum + i).toString().padStart(2, '0')}`;
+                
+                await createSpot({ id, lat: pos.lat(), lng: pos.lng() });
+                createdCount++;
+            } catch (err) {
+                errors.push({ index: i, error: err.message });
+            }
+        }
+        
+        if (errors.length > 0) {
+            showToast(`Creados ${createdCount} puestos. ${errors.length} errores.`, 'warning');
+            console.error('Errores en batch create:', errors);
+        } else {
+            showToast(`${createdCount} puestos creados exitosamente`, 'success');
+        }
+        
+        return createdCount;
+    } catch (error) {
+        showToast('Error crítico en batch create', 'error');
+        throw error;
+    } finally {
+        resetBuilder();
+    }
+}
+```
+
+## Related Documentation
+
+<Card title="Map Integration" icon="map" href="./map-integration">
+Understand marker rendering and map state management
+</Card>
+
+<Card title="Dashboard" icon="layer-group" href="./dashboard">
+See how builder mode fits into the overall architecture
+</Card>

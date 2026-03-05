@@ -1,0 +1,267 @@
+---
+title: "Get Zones"
+description: "Fetch all parking zones sorted by display order"
+---
+
+## Overview
+
+The `getZones` endpoint retrieves all parking zones from Firestore, ordered by the `order` field. If no zones exist, it returns a default "General" zone.
+
+## Endpoint
+
+```
+GET /get-zones
+```
+
+## Authentication
+
+CORS-enabled endpoint with wildcard origin (`*`). No authentication required for read access.
+
+## Request
+
+No parameters required. This is a simple GET request.
+
+## Response
+
+<ResponseField name="zones" type="array">
+  Array of zone objects sorted by `order` field (ascending)
+</ResponseField>
+
+<ResponseField name="zones[].id" type="string">
+  Unique zone identifier (e.g., "zone_1764307623391")
+</ResponseField>
+
+<ResponseField name="zones[].name" type="string">
+  Display name of the zone (e.g., "Federico Froebel")
+</ResponseField>
+
+<ResponseField name="zones[].order" type="integer">
+  Display order for sorting (lower numbers appear first)
+</ResponseField>
+
+<ResponseField name="zones[].desc" type="string">
+  Description of the zone
+</ResponseField>
+
+<ResponseField name="zones[].color" type="string">
+  Color code for UI display (e.g., "blue", "green")
+</ResponseField>
+
+<ResponseField name="zones[].created_at" type="timestamp">
+  Firestore timestamp of zone creation
+</ResponseField>
+
+<ResponseField name="zones[].updated_at" type="timestamp">
+  Firestore timestamp of last update
+</ResponseField>
+
+### Success Response
+
+- **200 OK** - Returns array of zones
+- **204 No Content** - OPTIONS preflight response
+
+### Error Response
+
+- **500 Internal Server Error** - Database or server error
+
+## Default Zone Behavior
+
+If no zones exist in the database, the endpoint returns a default zone:
+
+```json
+[
+  {
+    "id": "General",
+    "name": "General",
+    "order": 1,
+    "desc": "Zona general por defecto",
+    "color": "blue",
+    "created_at": "2026-03-05T10:00:00.000Z",
+    "updated_at": "2026-03-05T10:00:00.000Z"
+  }
+]
+```
+
+This ensures the frontend always has at least one zone to work with.
+
+## Code Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-zones
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-zones'
+);
+
+const zones = await response.json();
+
+console.log(`Found ${zones.length} zones`);
+
+zones.forEach(zone => {
+  console.log(`${zone.order}. ${zone.name} (${zone.id})`);
+});
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-zones'
+)
+
+zones = response.json()
+
+print(f"Found {len(zones)} zones")
+
+for zone in zones:
+    print(f"{zone['order']}. {zone['name']} ({zone['id']})")
+```
+
+</CodeGroup>
+
+## Response Example
+
+```json
+[
+  {
+    "id": "zone_1764307623391",
+    "name": "Federico Froebel",
+    "order": 1,
+    "desc": "Outdoor parking area on Federico Froebel street with 20 spots (A-01 to A-20)",
+    "color": "blue",
+    "created_at": {
+      "_seconds": 1764307623,
+      "_nanoseconds": 391000000
+    },
+    "updated_at": {
+      "_seconds": 1764307623,
+      "_nanoseconds": 391000000
+    }
+  },
+  {
+    "id": "zone_1764306251630",
+    "name": "Interior DUOC",
+    "order": 2,
+    "desc": "Indoor parking inside DUOC building with 16 spots (I-01 to I-16)",
+    "color": "green",
+    "created_at": {
+      "_seconds": 1764306251,
+      "_nanoseconds": 630000000
+    },
+    "updated_at": {
+      "_seconds": 1764306251,
+      "_nanoseconds": 630000000
+    }
+  }
+]
+```
+
+## Usage Patterns
+
+### Populate Zone Dropdown
+```javascript
+const zones = await fetch('/get-zones').then(r => r.json());
+
+const dropdown = document.getElementById('zone-select');
+zones.forEach(zone => {
+  const option = document.createElement('option');
+  option.value = zone.id;
+  option.textContent = zone.name;
+  dropdown.appendChild(option);
+});
+```
+
+### Display Zone Statistics
+```javascript
+const [zones, spots] = await Promise.all([
+  fetch('/get-zones').then(r => r.json()),
+  fetch('/get-parking-status').then(r => r.json())
+]);
+
+zones.forEach(zone => {
+  const zoneSpots = spots.filter(s => s.zone_id === zone.id);
+  const available = zoneSpots.filter(s => s.status === 1).length;
+  
+  console.log(`${zone.name}: ${available}/${zoneSpots.length} available`);
+});
+```
+
+### Color-Coded Map Markers
+```javascript
+const zones = await fetch('/get-zones').then(r => r.json());
+const zoneColors = Object.fromEntries(
+  zones.map(z => [z.id, z.color])
+);
+
+const spots = await fetch('/get-parking-status').then(r => r.json());
+
+spots.forEach(spot => {
+  const color = zoneColors[spot.zone_id] || 'gray';
+  addMapMarker(spot.lat, spot.lng, color);
+});
+```
+
+## Sorting Behavior
+
+Zones are returned sorted by the `order` field in ascending order:
+
+- `order: 1` appears first
+- `order: 2` appears second
+- `order: 999` appears last (default for new zones)
+
+This allows administrators to control the display order in dropdowns and UI lists.
+
+## Firestore Query
+
+The endpoint uses an indexed query:
+
+```javascript
+firestore
+  .collection('parking_zones')
+  .orderBy('order', 'asc')
+  .get()
+```
+
+<Note>
+  Ensure you have a Firestore index on the `order` field for optimal performance:
+  
+  ```
+  Collection: parking_zones
+  Field: order
+  Type: Ascending
+  ```
+</Note>
+
+## Caching Strategy
+
+Zones change infrequently, making them ideal for caching:
+
+```javascript
+let cachedZones = null;
+let cacheTime = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+async function getZones() {
+  const now = Date.now();
+  
+  if (cachedZones && (now - cacheTime) < CACHE_DURATION) {
+    return cachedZones;
+  }
+  
+  const zones = await fetch('/get-zones').then(r => r.json());
+  cachedZones = zones;
+  cacheTime = now;
+  
+  return zones;
+}
+```
+
+## Related Endpoints
+
+- [Manage Zones](/api/manage-zones) - Create, update, or delete zones
+- [Get Parking Status](/api/get-parking-status) - Get spots with zone assignments
+- [Get Occupancy History](/api/get-occupancy-history) - Filter analytics by zone

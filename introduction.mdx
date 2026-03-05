@@ -1,0 +1,123 @@
+---
+title: Introduction
+description: Smart IoT parking management platform with real-time monitoring, reservations, and predictive analytics
+---
+
+# Welcome to S-Parking
+
+**S-Parking** is a comprehensive smart parking management platform that digitizes physical parking infrastructure using IoT sensors and cloud computing. The system monitors occupancy in real-time using laser distance sensors, processes data through a serverless architecture on Google Cloud Platform, and delivers predictive analytics for decision-making.
+
+<Note>
+  This project was designed and developed end-to-end by **Joaquín Troncoso**, demonstrating expertise in IoT integration, cloud architecture, and full-stack development.
+</Note>
+
+## What is S-Parking?
+
+S-Parking transforms traditional parking lots into intelligent, data-driven facilities by combining:
+
+- **IoT Hardware**: ESP32-based sensor nodes that detect vehicle presence
+- **Cloud Backend**: Serverless microservices on Google Cloud Run
+- **Real-time Database**: Cloud Firestore for instant data synchronization
+- **Web Dashboard**: Responsive SPA with live updates and analytics
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Real-time Monitoring" icon="radar">
+    Visualize available and occupied spots with sub-2-second latency. See exactly which parking spaces are free right now.
+  </Card>
+  
+  <Card title="Reservation System" icon="calendar-check">
+    Users can reserve spots in advance with automatic expiration. The system protects reservations from premature cancellation.
+  </Card>
+  
+  <Card title="Builder Mode" icon="pen-ruler">
+    Visual tool for admins to draw and configure new parking zones directly on the map interface.
+  </Card>
+  
+  <Card title="Analytics Dashboard" icon="chart-line">
+    Automatic generation of occupancy metrics, rotation statistics, and peak hour analysis.
+  </Card>
+</CardGroup>
+
+## Who Should Use S-Parking?
+
+### Parking Lot Operators
+Manage multiple zones, monitor capacity in real-time, and make data-driven decisions about expansion or optimization.
+
+### Facility Managers
+Ideal for shopping centers, office buildings, universities, or any facility with parking infrastructure.
+
+### Drivers & End Users
+Find available spots quickly, reserve parking in advance, and reduce time spent searching for spaces.
+
+### IoT Developers
+Learn from a production-ready IoT system with self-healing capabilities, edge intelligence, and cloud integration.
+
+## Technical Highlights
+
+<CardGroup cols={2}>
+  <Card title="Serverless Architecture" icon="cloud">
+    Node.js 20 microservices on Cloud Run with automatic scaling and zero maintenance overhead.
+  </Card>
+  
+  <Card title="Self-Healing Sensors" icon="bandage">
+    ESP32 nodes detect desynchronization and automatically correct cloud state using polling and comparison logic.
+  </Card>
+  
+  <Card title="Smart Caching" icon="layer-group">
+    Multi-layer cache (memory + localStorage) with TTL management reduces API calls by 80% and improves UI responsiveness.
+  </Card>
+  
+  <Card title="Cost Optimization" icon="piggy-bank">
+    Page Visibility API pauses polling when dashboard is in background, cutting Firestore reads and operational costs.
+  </Card>
+</CardGroup>
+
+## System Status
+
+- **Status**: Production Ready ✅
+- **Platform**: ESP32 IoT + GCP Serverless
+- **License**: Proprietary
+- **Database**: Cloud Firestore (NoSQL Real-time)
+- **Hosting**: Firebase Hosting with HTTP/2 and Global SSL
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get your first parking spot monitored in minutes
+  </Card>
+  
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Understand the three-layer cloud-native design
+  </Card>
+</CardGroup>
+
+<Warning>
+  **Hardware Requirements**: This system requires ESP32 microcontrollers and VL53L0X ToF laser distance sensors. See the Quickstart guide for complete hardware setup.
+</Warning>
+
+## Use Cases
+
+1. **Commercial Parking Lots**: Maximize revenue with real-time availability displays and reservation premium services
+2. **Corporate Campuses**: Assign zones to departments, monitor employee parking patterns
+3. **Shopping Centers**: Reduce customer frustration with live availability maps
+4. **Smart Cities**: Integrate with mobile apps for city-wide parking availability
+5. **Universities**: Manage student, faculty, and visitor parking zones separately
+
+## Technology Stack Overview
+
+- **IoT**: ESP32, VL53L0X ToF Sensor, RGB LED indicators
+- **Backend**: Node.js 20, Google Cloud Run, Cloud Scheduler
+- **Database**: Cloud Firestore with real-time listeners
+- **Frontend**: Vanilla JavaScript (ES6+ modules), Tailwind CSS
+- **Maps**: Google Maps JavaScript API with custom overlays
+- **Visualization**: Chart.js 4.x for occupancy trends
+- **Auth**: Firebase Authentication with custom claims
+
+---
+
+<Note>
+  **Ready to get started?** Head over to the [Quickstart Guide](/quickstart) to deploy your first sensor node and see real-time data flowing into the dashboard.
+</Note>

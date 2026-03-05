@@ -1,0 +1,404 @@
+---
+title: "Save Hourly Snapshot"
+description: "Create hourly occupancy snapshots for analytics (Cloud Scheduler trigger)"
+---
+
+## Overview
+
+The `saveHourlySnapshot` endpoint creates hourly snapshots of parking occupancy data for analytics and historical tracking. It's designed to be triggered by Google Cloud Scheduler on an hourly basis, with support for development mode to generate historical mock data.
+
+## Endpoint
+
+```
+GET /save-hourly-snapshot
+POST /save-hourly-snapshot
+```
+
+## Authentication
+
+CORS-enabled endpoint. In production, should be restricted to Cloud Scheduler service account.
+
+## Request Methods
+
+### GET Request (Production)
+
+Used by Cloud Scheduler to create real-time snapshots based on current parking data.
+
+**No parameters required.**
+
+### POST Request (Development)
+
+Used for generating historical snapshots with optional mock data for testing.
+
+<ParamField body="hoursAgo" type="integer">
+  Generate snapshot for X hours in the past. Used for backfilling historical data.
+</ParamField>
+
+<ParamField body="mockData" type="boolean">
+  If `true`, generates realistic mock occupancy data instead of reading from Firestore. Useful for testing and demonstrations.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Indicates whether the snapshot was saved successfully
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Result message describing the operation
+</ResponseField>
+
+<ResponseField name="hour_key" type="string">
+  The hour identifier for this snapshot (format: `YYYY-MM-DD-HH`)
+</ResponseField>
+
+<ResponseField name="timestamp" type="string">
+  ISO 8601 timestamp of the snapshot
+</ResponseField>
+
+<ResponseField name="retention_deleted" type="integer">
+  Number of old snapshots deleted by retention policy (>30 days)
+</ResponseField>
+
+<ResponseField name="global" type="object">
+  Global occupancy statistics:
+  - `free`: Available spots
+  - `occupied`: Occupied spots
+  - `reserved`: Reserved spots
+  - `total`: Total spots
+  - `occupancyPct`: Occupancy percentage (0-100)
+</ResponseField>
+
+<ResponseField name="zones_count" type="integer">
+  Number of zones included in the snapshot
+</ResponseField>
+
+<ResponseField name="development_mode" type="boolean">
+  Indicates if snapshot was generated in development mode
+</ResponseField>
+
+### Success Response
+
+- **200 OK** - Snapshot saved successfully
+- **204 No Content** - OPTIONS preflight response
+
+### Error Responses
+
+- **405 Method Not Allowed** - Request method is not GET or POST
+- **500 Internal Server Error** - Database or server error
+
+## Cloud Scheduler Configuration
+
+Schedule this function to run hourly:
+
+```bash
+gcloud scheduler jobs create http parking-hourly-snapshot \
+  --schedule="0 * * * *" \
+  --uri="https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot" \
+  --http-method=GET \
+  --time-zone="America/Santiago" \
+  --description="Hourly parking occupancy snapshot"
+```
+
+This runs at minute 0 of every hour (e.g., 10:00, 11:00, 12:00).
+
+## Code Examples
+
+### Production Trigger (GET)
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot'
+);
+
+const result = await response.json();
+console.log(`Snapshot saved: ${result.hour_key}`);
+console.log(`Occupancy: ${result.global.occupancyPct}%`);
+console.log(`Retention cleaned: ${result.retention_deleted} old snapshots`);
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot'
+)
+
+result = response.json()
+print(f"Snapshot saved: {result['hour_key']}")
+print(f"Occupancy: {result['global']['occupancyPct']}%")
+print(f"Retention cleaned: {result['retention_deleted']} old snapshots")
+```
+
+</CodeGroup>
+
+### Development Mode (POST)
+
+<CodeGroup>
+
+```bash cURL - Real Data 24h Ago
+curl -X POST https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot \
+  -H "Content-Type: application/json" \
+  -d '{"hoursAgo": 24}'
+```
+
+```bash cURL - Mock Data 48h Ago
+curl -X POST https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot \
+  -H "Content-Type: application/json" \
+  -d '{"hoursAgo": 48, "mockData": true}'
+```
+
+```javascript JavaScript - Generate 7 Days of Mock Data
+// Backfill last 7 days with realistic mock data
+for (let hoursAgo = 0; hoursAgo < 7 * 24; hoursAgo++) {
+  await fetch('/save-hourly-snapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hoursAgo, mockData: true })
+  });
+  console.log(`Generated snapshot for ${hoursAgo} hours ago`);
+}
+```
+
+```python Python - Backfill Historical Data
+import requests
+import time
+
+# Generate last 30 days of mock data
+for hours_ago in range(0, 30 * 24, 1):
+    response = requests.post(
+        'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/save-hourly-snapshot',
+        json={'hoursAgo': hours_ago, 'mockData': True}
+    )
+    result = response.json()
+    print(f"Generated: {result['hour_key']}")
+    time.sleep(0.1)  # Rate limiting
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### Production Snapshot
+
+```json
+{
+  "success": true,
+  "message": "Snapshot horario generado",
+  "hour_key": "2026-03-05-14",
+  "timestamp": "2026-03-05T14:00:00.000Z",
+  "retention_deleted": 2,
+  "global": {
+    "free": 8,
+    "occupied": 24,
+    "reserved": 4,
+    "total": 36,
+    "occupancyPct": 78
+  },
+  "zones_count": 2,
+  "development_mode": false
+}
+```
+
+### Development Snapshot with Mock Data
+
+```json
+{
+  "success": true,
+  "message": "Snapshot histórico generado (dev)",
+  "hour_key": "2026-03-03-10",
+  "timestamp": "2026-03-03T10:00:00.000Z",
+  "retention_deleted": 0,
+  "global": {
+    "free": 12,
+    "occupied": 20,
+    "reserved": 4,
+    "total": 36,
+    "occupancyPct": 67
+  },
+  "zones_count": 2,
+  "development_mode": true
+}
+```
+
+## Mock Data Patterns
+
+The mock data generator creates realistic occupancy patterns based on:
+
+### University Parking Patterns
+
+**Weekdays (Monday-Friday):**
+- **8:00-10:00 Chile time**: 70-85% occupancy (morning arrival)
+- **11:00-15:00 Chile time**: 85-95% occupancy (peak hours)
+- **16:00-19:00 Chile time**: 65-80% occupancy (afternoon classes)
+- **20:00-22:00 Chile time**: 40-55% occupancy (evening classes)
+- **23:00-01:00 Chile time**: 20-35% occupancy (late classes ending)
+- **02:00-07:00 Chile time**: 3-10% occupancy (overnight)
+
+**Weekends (Saturday-Sunday):**
+- **11:00-19:00 Chile time**: 10-22% occupancy (minimal activity)
+- **Other hours**: 1-5% occupancy (nearly empty)
+
+### Zone Configuration
+
+The mock data includes two zones matching the real S-Parking deployment:
+
+1. **Federico Froebel** (`zone_1764307623391`): 20 spots (A-01 to A-20)
+2. **Interior DUOC** (`zone_1764306251630`): 16 spots (I-01 to I-16)
+
+Each zone has slightly different occupancy patterns to simulate real-world variance.
+
+## Firestore Data Structure
+
+Snapshot documents in `occupancy_history` collection:
+
+```javascript
+{
+  hour_key: "2026-03-05-14",        // Document ID (for idempotency)
+  timestamp: "2026-03-05T14:00:00.000Z",
+  ts: 1709650800000,                 // Unix timestamp for queries
+  global: {
+    free: 8,
+    occupied: 24,
+    reserved: 4,
+    total: 36,
+    occupancyPct: 78
+  },
+  zones: {
+    "zone_1764307623391": {
+      free: 4,
+      occupied: 14,
+      reserved: 2,
+      total: 20,
+      occupancyPct: 80
+    },
+    "zone_1764306251630": {
+      free: 4,
+      occupied: 10,
+      reserved: 2,
+      total: 16,
+      occupancyPct: 75
+    }
+  },
+  created_at: Timestamp
+}
+```
+
+## Retention Policy
+
+Every execution automatically deletes snapshots older than 30 days:
+
+```javascript
+const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+const oldQuery = await firestore
+  .collection('occupancy_history')
+  .where('ts', '<', cutoffMs)
+  .get();
+
+// Batch delete old documents
+const batch = firestore.batch();
+oldQuery.docs.forEach(doc => batch.delete(doc.ref));
+await batch.commit();
+```
+
+This ensures:
+- Storage costs remain predictable
+- Query performance stays optimal
+- Compliance with data retention policies
+
+## Idempotency
+
+The function uses `hour_key` as the document ID:
+
+```javascript
+const ref = firestore.collection('occupancy_history').doc(hourKey);
+await ref.set(docData, { merge: true });
+```
+
+This means:
+- Running the function multiple times for the same hour overwrites (updates) the snapshot
+- Safe to retry on failures
+- Prevents duplicate entries
+
+## Hour Key Format
+
+The hour key uses UTC time with zero-padded format:
+
+```javascript
+function buildHourKey(date = new Date()) {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  const h = String(date.getUTCHours()).padStart(2, '0');
+  return `${y}-${m}-${d}-${h}`; // e.g., "2026-03-05-14"
+}
+```
+
+Examples:
+- March 5, 2026 at 2:00 PM UTC → `2026-03-05-14`
+- December 31, 2025 at 11:00 PM UTC → `2025-12-31-23`
+
+## Testing Strategy
+
+### Generate Test Dataset
+
+```javascript
+// Generate realistic test data for last 7 days
+async function generateTestData() {
+  const promises = [];
+  
+  for (let hoursAgo = 0; hoursAgo < 7 * 24; hoursAgo++) {
+    promises.push(
+      fetch('/save-hourly-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hoursAgo, mockData: true })
+      })
+    );
+    
+    // Batch requests to avoid overwhelming the function
+    if (promises.length >= 10) {
+      await Promise.all(promises);
+      promises.length = 0;
+      console.log(`Generated ${hoursAgo} snapshots...`);
+    }
+  }
+  
+  await Promise.all(promises);
+  console.log('Test data generation complete!');
+}
+
+generate TestData();
+```
+
+### Verify Snapshot Creation
+
+```javascript
+// Trigger snapshot and verify it appears in history
+const saveResponse = await fetch('/save-hourly-snapshot');
+const saveResult = await saveResponse.json();
+
+console.log(`Created snapshot: ${saveResult.hour_key}`);
+
+// Wait a moment for Firestore consistency
+await new Promise(resolve => setTimeout(resolve, 1000));
+
+// Verify it appears in history
+const historyResponse = await fetch('/get-occupancy-history?days=1');
+const historyData = await historyResponse.json();
+
+const found = historyData.samples.find(s => s.hour_key === saveResult.hour_key);
+console.log(found ? '✅ Snapshot found in history' : '❌ Snapshot not found');
+```
+
+## Related Endpoints
+
+- [Get Occupancy History](/api/get-occupancy-history) - Retrieve saved snapshots
+- [Get Parking Status](/api/get-parking-status) - Real-time data source for production snapshots
+- [Get Zones](/api/get-zones) - Zone definitions used in snapshots

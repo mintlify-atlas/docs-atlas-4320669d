@@ -1,0 +1,435 @@
+---
+title: 'Parking API'
+description: 'Client-side API functions for managing parking spots and reservations'
+icon: 'car'
+---
+
+## Overview
+
+The Parking API provides functions to fetch parking spot status, create/update/delete spots (admin only), and manage reservations. It includes intelligent caching to reduce API calls and localStorage fallback for offline support.
+
+## Import
+
+```javascript
+import { 
+  fetchParkingStatus, 
+  reserveSpot, 
+  releaseSpot,
+  createSpot,
+  updateSpot,
+  deleteSpot,
+  invalidateParkingCache,
+  bulkAssignSpots,
+  bulkDeleteSpots
+} from './js/api/parking.js';
+```
+
+## Caching Behavior
+
+The Parking API implements a two-layer caching strategy:
+
+- **Memory Cache**: Stores parking status in memory with configurable TTL (default 15 seconds)
+- **localStorage Cache**: Persistent fallback storage when API is unavailable
+
+### Cache Keys
+
+<ParamField path="STORAGE_KEY_SPOTS" type="string" default="'sparking_spots_local'">
+  localStorage key for cached parking spots data
+</ParamField>
+
+<ParamField path="STORAGE_KEY_SPOTS_SYNC" type="string" default="'sparking_spots_synced_at'">
+  localStorage key for last sync timestamp (ISO 8601 format)
+</ParamField>
+
+### Cache Duration
+
+The cache TTL is configurable via `CONFIG.PERFORMANCE.CACHE_PARKING_STATUS` (default: 15000ms).
+
+---
+
+## fetchParkingStatus
+
+Retrieves the current status of all parking spots with intelligent caching.
+
+### Function Signature
+
+```javascript
+async function fetchParkingStatus(): Promise<Array<Spot>>
+```
+
+### Returns
+
+<ResponseField name="spots" type="array">
+  Array of parking spot objects
+  
+  <ResponseField name="id" type="string">
+    Unique spot identifier (e.g., "A1", "B2")
+  </ResponseField>
+  
+  <ResponseField name="lat" type="number">
+    Latitude coordinate
+  </ResponseField>
+  
+  <ResponseField name="lng" type="number">
+    Longitude coordinate
+  </ResponseField>
+  
+  <ResponseField name="desc" type="string">
+    Spot description
+  </ResponseField>
+  
+  <ResponseField name="status" type="number">
+    Spot status: 1 = available, 2 = occupied, 3 = reserved
+  </ResponseField>
+  
+  <ResponseField name="zone_id" type="string">
+    Associated zone ID (empty string if unassigned)
+  </ResponseField>
+  
+  <ResponseField name="license_plate" type="string" optional>
+    Vehicle license plate if spot is occupied/reserved
+  </ResponseField>
+  
+  <ResponseField name="created_at" type="string">
+    Creation timestamp (ISO 8601)
+  </ResponseField>
+  
+  <ResponseField name="updated_at" type="string" optional>
+    Last update timestamp (ISO 8601)
+  </ResponseField>
+</ResponseField>
+
+### Cache Behavior
+
+1. **Memory cache hit**: Returns cached data if less than 15 seconds old
+2. **API call**: Fetches from `CONFIG.GET_STATUS_API_URL` and updates both memory and localStorage
+3. **Fallback**: Returns localStorage data if API fails
+4. **Throws**: Error if both API and localStorage are unavailable
+
+### Usage Example
+
+```javascript
+import { fetchParkingStatus } from './js/api/parking.js';
+
+try {
+  const spots = await fetchParkingStatus();
+  console.log(`Loaded ${spots.length} parking spots`);
+  
+  const availableSpots = spots.filter(s => s.status === 1);
+  console.log(`${availableSpots.length} spots available`);
+} catch (error) {
+  console.error('Failed to load parking status:', error);
+}
+```
+
+---
+
+## reserveSpot
+
+Creates a reservation for a specific parking spot.
+
+### Function Signature
+
+```javascript
+async function reserveSpot(
+  spotId: string,
+  licensePlate: string,
+  durationMinutes: number
+): Promise<ReservationResponse>
+```
+
+### Parameters
+
+<ParamField path="spotId" type="string" required>
+  ID of the parking spot to reserve (e.g., "A1")
+</ParamField>
+
+<ParamField path="licensePlate" type="string" required>
+  Vehicle license plate number
+</ParamField>
+
+<ParamField path="durationMinutes" type="number" required>
+  Reservation duration in minutes
+</ParamField>
+
+### Returns
+
+<ResponseField name="response" type="object">
+  Reservation confirmation object (structure depends on backend API)
+</ResponseField>
+
+### Behavior
+
+- Invalidates parking cache immediately to force refresh
+- Sends POST request to `CONFIG.RESERVATION_API_URL`
+- Throws error if reservation fails (display to user)
+
+### Usage Example
+
+```javascript
+import { reserveSpot } from './js/api/parking.js';
+
+try {
+  const result = await reserveSpot('A1', 'ABC-123', 60);
+  console.log('Reservation successful:', result);
+} catch (error) {
+  alert(`Reservation failed: ${error.message}`);
+}
+```
+
+---
+
+## releaseSpot
+
+Cancels a reservation and releases the parking spot.
+
+### Function Signature
+
+```javascript
+async function releaseSpot(spotId: string): Promise<boolean>
+```
+
+### Parameters
+
+<ParamField path="spotId" type="string" required>
+  ID of the parking spot to release
+</ParamField>
+
+### Returns
+
+<ResponseField name="success" type="boolean">
+  `true` if release succeeded, `false` if it failed
+</ResponseField>
+
+### Behavior
+
+- Invalidates parking cache immediately
+- Sends POST request to `CONFIG.RELEASE_API_URL`
+- Returns `false` instead of throwing on error
+
+### Usage Example
+
+```javascript
+import { releaseSpot } from './js/api/parking.js';
+
+const success = await releaseSpot('A1');
+if (success) {
+  console.log('Spot released successfully');
+} else {
+  console.error('Failed to release spot');
+}
+```
+
+---
+
+## Admin Functions
+
+### createSpot
+
+Creates a new parking spot (admin only).
+
+```javascript
+async function createSpot(data: SpotData): Promise<CreateResponse>
+```
+
+**Parameters:**
+
+<ParamField path="data.id" type="string" required>
+  Unique spot ID (will be converted to uppercase)
+</ParamField>
+
+<ParamField path="data.lat" type="number" required>
+  Latitude coordinate
+</ParamField>
+
+<ParamField path="data.lng" type="number" required>
+  Longitude coordinate
+</ParamField>
+
+<ParamField path="data.desc" type="string" required>
+  Spot description
+</ParamField>
+
+<ParamField path="data.zone_id" type="string" optional>
+  Zone assignment (optional)
+</ParamField>
+
+<ParamField path="data.status" type="number" optional default="1">
+  Initial status (default: 1 = available)
+</ParamField>
+
+**Example:**
+
+```javascript
+import { createSpot } from './js/api/parking.js';
+
+const result = await createSpot({
+  id: 'C5',
+  lat: -33.4372,
+  lng: -70.6506,
+  desc: 'Section C - Row 5',
+  zone_id: 'zone_vip',
+  status: 1
+});
+```
+
+### updateSpot
+
+Updates an existing parking spot (admin only).
+
+```javascript
+async function updateSpot(spotId: string, data: Partial<SpotData>): Promise<UpdateResponse>
+```
+
+**Parameters:**
+
+<ParamField path="spotId" type="string" required>
+  ID of the spot to update
+</ParamField>
+
+<ParamField path="data" type="object" required>
+  Partial object with fields to update (desc, zone_id, lat, lng, status, etc.)
+</ParamField>
+
+**Example:**
+
+```javascript
+import { updateSpot } from './js/api/parking.js';
+
+// Update zone assignment
+await updateSpot('A1', { zone_id: 'zone_premium' });
+
+// Update description
+await updateSpot('B2', { desc: 'Handicap Accessible' });
+```
+
+### deleteSpot
+
+Deletes a parking spot (admin only).
+
+```javascript
+async function deleteSpot(id: string): Promise<boolean>
+```
+
+**Example:**
+
+```javascript
+import { deleteSpot } from './js/api/parking.js';
+
+const success = await deleteSpot('C5');
+if (success) {
+  console.log('Spot deleted');
+}
+```
+
+---
+
+## Utility Functions
+
+### invalidateParkingCache
+
+Manually invalidates the memory cache to force a fresh API call.
+
+```javascript
+function invalidateParkingCache(): void
+```
+
+**Example:**
+
+```javascript
+import { invalidateParkingCache, fetchParkingStatus } from './js/api/parking.js';
+
+// Force refresh after external update
+invalidateParkingCache();
+const freshData = await fetchParkingStatus();
+```
+
+### bulkAssignSpots
+
+Assigns multiple spots to a zone in series.
+
+```javascript
+async function bulkAssignSpots(
+  zoneId: string,
+  spotIds: Array<string>
+): Promise<Array<BulkResult>>
+```
+
+**Parameters:**
+
+<ParamField path="zoneId" type="string" required>
+  Target zone ID (empty string to unassign)
+</ParamField>
+
+<ParamField path="spotIds" type="array" required>
+  Array of spot IDs to assign
+</ParamField>
+
+**Returns:**
+
+Array of result objects: `{ id: string, success: boolean, res?: any, error?: any }`
+
+**Example:**
+
+```javascript
+import { bulkAssignSpots } from './js/api/parking.js';
+
+const results = await bulkAssignSpots('zone_vip', ['A1', 'A2', 'A3']);
+const successCount = results.filter(r => r.success).length;
+console.log(`${successCount}/${results.length} spots assigned`);
+```
+
+### bulkDeleteSpots
+
+Deletes multiple spots in series.
+
+```javascript
+async function bulkDeleteSpots(spotIds: Array<string>): Promise<Array<BulkResult>>
+```
+
+**Example:**
+
+```javascript
+import { bulkDeleteSpots } from './js/api/parking.js';
+
+const results = await bulkDeleteSpots(['C1', 'C2', 'C3']);
+const deletedCount = results.filter(r => r.success).length;
+console.log(`${deletedCount} spots deleted`);
+```
+
+---
+
+## Error Handling
+
+All async functions can throw errors. Best practices:
+
+```javascript
+import { fetchParkingStatus, reserveSpot } from './js/api/parking.js';
+
+// Wrap in try-catch
+try {
+  const spots = await fetchParkingStatus();
+  await reserveSpot('A1', 'XYZ-789', 120);
+} catch (error) {
+  console.error('Operation failed:', error.message);
+  // Handle error (show toast, modal, etc.)
+}
+
+// Or use .catch()
+fetchParkingStatus()
+  .then(spots => {
+    console.log('Loaded spots:', spots.length);
+  })
+  .catch(error => {
+    console.error('Failed to load spots:', error);
+  });
+```
+
+## Offline Support
+
+All functions include localStorage fallback:
+
+- **Reads**: Fall back to cached data if API is unavailable
+- **Writes**: Save changes locally with `_local: true` flag to sync later
+
+Local-only changes are marked with `_local: true` in the response object.

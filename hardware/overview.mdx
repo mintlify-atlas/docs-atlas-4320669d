@@ -1,0 +1,177 @@
+---
+title: Hardware Overview
+description: ESP32-based parking sensor hardware components and specifications
+---
+
+The S-Parking system uses ESP32 microcontrollers paired with VL53L0X time-of-flight sensors and RGB LEDs to create intelligent parking space monitors.
+
+## Hardware Components
+
+Each parking sensor unit consists of:
+
+<Steps>
+  <Step title="ESP32 Development Board">
+    The main microcontroller that handles:
+    - WiFi connectivity to backend services
+    - Sensor data processing
+    - LED control logic
+    - State synchronization with cloud
+  </Step>
+  
+  <Step title="VL53L0X Time-of-Flight Sensor">
+    Laser-based distance sensor that:
+    - Measures distances up to 2000mm
+    - Uses I2C communication protocol
+    - Provides accurate occupancy detection
+    - Low power consumption
+  </Step>
+  
+  <Step title="RGB LED (Common Anode)">
+    Visual indicator showing:
+    - **Red**: Space occupied
+    - **Green**: Space available
+    - **Amber**: Space reserved (red + green)
+  </Step>
+</Steps>
+
+## ESP32 Specifications
+
+The firmware is designed for ESP32 boards with the following requirements:
+
+| Feature | Specification |
+|---------|---------------|
+| **CPU** | Dual-core Tensilica LX6 |
+| **WiFi** | 802.11 b/g/n (2.4 GHz) |
+| **GPIO Pins** | Minimum 3 required for LED |
+| **I2C** | Required for VL53L0X sensor |
+| **Flash** | 4MB recommended |
+| **Operating Voltage** | 3.3V |
+
+## Pin Configuration
+
+The default pin configuration from `S-Parking.ino:9-11`:
+
+```cpp
+#define LED_RED_PIN 13
+#define LED_GREEN_PIN 12
+#define LED_BLUE_PIN 14
+```
+
+<ParamField path="LED_RED_PIN" type="GPIO" default="13">
+  GPIO pin for red LED channel (common anode, active LOW)
+</ParamField>
+
+<ParamField path="LED_GREEN_PIN" type="GPIO" default="12">
+  GPIO pin for green LED channel (common anode, active LOW)
+</ParamField>
+
+<ParamField path="LED_BLUE_PIN" type="GPIO" default="14">
+  GPIO pin for blue LED channel (reserved, not used for amber)
+</ParamField>
+
+## Sensor Types
+
+### VL53L0X Time-of-Flight Sensor
+
+The Adafruit VL53L0X sensor uses laser-based ToF technology:
+
+**Technical Specifications:**
+- **Range**: 30mm to 2000mm
+- **Accuracy**: ±3% at typical distances
+- **Interface**: I2C (address 0x29)
+- **Voltage**: 2.6V to 3.5V
+- **Field of View**: 25°
+
+**Why Time-of-Flight?**
+- More accurate than ultrasonic sensors
+- Not affected by object color or reflectivity
+- Fast measurement cycle (500ms in our implementation)
+- Reliable in various lighting conditions
+
+## LED Indicators
+
+The system uses a common anode RGB LED with inverted logic:
+
+### Color States
+
+<CodeGroup>
+```cpp Red (Occupied)
+setColor(1, 0, 0); // Physical car detected
+```
+
+```cpp Green (Available)
+setColor(0, 1, 0); // No car, no reservation
+```
+
+```cpp Amber (Reserved)
+setColor(1, 1, 0); // Reserved but not yet occupied
+```
+</CodeGroup>
+
+### State Priority Logic
+
+From `S-Parking.ino:173-191`, the LED update logic follows this priority:
+
+1. **Physical presence overrides everything** - If sensor detects a car, show RED
+2. **Reservation status** - If no car but cloud shows reserved (status=2), show AMBER
+3. **Available** - If no car and no reservation, show GREEN
+
+```cpp
+void updateLEDs() {
+  // 1. Maximum Priority: Physical car present = RED
+  if (estadoLocalSensor == 0) {
+    setColor(1, 0, 0); // Red
+    return;
+  }
+
+  // 2. Check cloud for reservation
+  if (estadoNube == 2) {
+    setColor(1, 1, 0); // Amber (Red + Green)
+    return;
+  }
+
+  // 3. No car, no reservation = GREEN
+  setColor(0, 1, 0); // Green (Available)
+}
+```
+
+<Warning>
+  The LED uses **common anode** configuration, meaning the logic is inverted:
+  - `LOW` (0V) turns the LED **ON**
+  - `HIGH` (3.3V) turns the LED **OFF**
+  
+  The `setColor()` function handles this inversion automatically.
+</Warning>
+
+## Timing and Intervals
+
+The firmware uses two timing loops from `S-Parking.ino:30-31`:
+
+<ParamField path="sensorInterval" type="milliseconds" default="500">
+  Sensor reading frequency - checked every 0.5 seconds for immediate response when cars park
+</ParamField>
+
+<ParamField path="cloudPollInterval" type="milliseconds" default="15000">
+  Cloud synchronization frequency - checked every 15 seconds for reservation updates
+</ParamField>
+
+**Why different intervals?**
+- Fast sensor reads ensure immediate red light when cars arrive
+- Slower cloud polls reduce network traffic and API costs
+- This asymmetric design balances responsiveness with efficiency
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="ESP32 Setup" icon="microchip" href="/hardware/esp32-setup">
+    Configure your ESP32 and flash the firmware
+  </Card>
+  
+  <Card title="Sensor Calibration" icon="ruler" href="/hardware/sensor-calibration">
+    Calibrate VL53L0X sensors and set distance thresholds
+  </Card>
+  
+  <Card title="LED Indicators" icon="lightbulb" href="/hardware/led-indicators">
+    Wire and configure RGB LED indicators
+  </Card>
+</CardGroup>

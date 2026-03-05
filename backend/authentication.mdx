@@ -1,0 +1,556 @@
+---
+title: Authentication
+description: Firebase Authentication setup and admin access control for S-Parking
+icon: lock
+---
+
+## Overview
+
+S-Parking uses **Firebase Authentication** with email/password authentication and custom claims for admin role management. The authentication layer is built on Firebase JS SDK v10.7.1.
+
+<CardGroup cols={2}>
+  <Card title="Email/Password" icon="envelope">
+    Standard authentication with email verification
+  </Card>
+  <Card title="Custom Claims" icon="user-shield">
+    Admin privileges via Firebase custom claims
+  </Card>
+  <Card title="Session Management" icon="clock">
+    Token-based sessions with auto-refresh
+  </Card>
+  <Card title="Password Reset" icon="key">
+    Built-in password recovery flow
+  </Card>
+</CardGroup>
+
+## Firebase Configuration
+
+Authentication is initialized via the Firebase config in `js/config/config.js`:
+
+```javascript
+export const CONFIG = {
+  FIREBASE: {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "your-project.firebaseapp.com",
+    projectId: "your-project-id",
+    storageBucket: "your-project.appspot.com",
+    messagingSenderId: "123456789",
+    appId: "1:12345:web:abcdef"
+  }
+};
+```
+
+### Initialization
+
+```javascript
+// js/auth/auth.js
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+const app = initializeApp(CONFIG.FIREBASE);
+const auth = getAuth(app);
+```
+
+## Authentication Methods
+
+### 1. User Registration
+
+Create a new user account with email verification:
+
+```javascript
+import { registerUser } from './js/auth/auth.js';
+
+const result = await registerUser('user@example.com', 'password123');
+
+if (result.success) {
+  console.log('Account created:', result.user);
+  console.log(result.message); // "Cuenta creada. Revisa tu correo."
+} else {
+  console.error('Registration failed:', result.message);
+}
+```
+
+**Implementation:**
+
+```javascript
+export async function registerUser(email, password) {
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    await sendEmailVerification(userCredential.user);
+    return { 
+      success: true, 
+      user: userCredential.user, 
+      message: "Cuenta creada. Revisa tu correo." 
+    };
+  } catch (error) {
+    return { success: false, message: translateError(error.code) };
+  }
+}
+```
+
+### 2. User Login
+
+Authenticate with email and password, requiring email verification:
+
+```javascript
+import { loginUser } from './js/auth/auth.js';
+
+const result = await loginUser('user@example.com', 'password123');
+
+if (result.success) {
+  console.log('Logged in:', result.user);
+  // Token automatically stored in localStorage
+} else {
+  console.error('Login failed:', result.message);
+}
+```
+
+**Implementation:**
+
+```javascript
+export async function loginUser(email, password) {
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+    
+    // Require email verification
+    if (!user.emailVerified) {
+      return { success: false, message: "Debes verificar tu correo primero." };
+    }
+    
+    return { success: true, user };
+  } catch (error) {
+    return { success: false, message: translateError(error.code) };
+  }
+}
+```
+
+### 3. User Logout
+
+Sign out and clear local tokens:
+
+```javascript
+import { logoutUser } from './js/auth/auth.js';
+
+const result = await logoutUser();
+
+if (result.success) {
+  console.log('Logged out successfully');
+  // Redirect to login page
+}
+```
+
+**Implementation:**
+
+```javascript
+export async function logoutUser() {
+  try {
+    await signOut(auth);
+    localStorage.removeItem('auth_token');
+    return { success: true };
+  } catch (error) {
+    console.error("Error al salir:", error);
+    return { success: false, error };
+  }
+}
+```
+
+### 4. Password Reset
+
+Send password reset email:
+
+```javascript
+import { resetPasswordUser } from './js/auth/auth.js';
+
+const result = await resetPasswordUser('user@example.com');
+
+if (result.success) {
+  console.log(result.message); // "Correo de recuperación enviado."
+}
+```
+
+**Implementation:**
+
+```javascript
+export async function resetPasswordUser(email) {
+  try {
+    await sendPasswordResetEmail(auth, email);
+    return { success: true, message: "Correo de recuperación enviado." };
+  } catch (error) {
+    return { success: false, message: translateError(error.code) };
+  }
+}
+```
+
+## Error Handling
+
+All Firebase authentication errors are translated to user-friendly Spanish messages:
+
+```javascript
+function translateError(code) {
+  const errors = {
+    'auth/email-already-in-use': 'Este correo ya está registrado.',
+    'auth/invalid-email': 'El correo no es válido.',
+    'auth/weak-password': 'La contraseña es muy débil (mínimo 6 caracteres).',
+    'auth/user-not-found': 'Usuario no encontrado.',
+    'auth/wrong-password': 'Contraseña incorrecta.',
+    'auth/too-many-requests': 'Demasiados intentos. Intenta más tarde.'
+  };
+  return errors[code] || `Error desconocido: ${code}`;
+}
+```
+
+<Tabs>
+  <Tab title="Email Already Exists">
+    ```json
+    {
+      "success": false,
+      "message": "Este correo ya está registrado."
+    }
+    ```
+  </Tab>
+  <Tab title="Weak Password">
+    ```json
+    {
+      "success": false,
+      "message": "La contraseña es muy débil (mínimo 6 caracteres)."
+    }
+    ```
+  </Tab>
+  <Tab title="Invalid Credentials">
+    ```json
+    {
+      "success": false,
+      "message": "Contraseña incorrecta."
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Session Management
+
+### Auth State Observer
+
+Monitor authentication state changes and auto-refresh tokens:
+
+```javascript
+import { monitorAuthState } from './js/auth/auth.js';
+
+monitorAuthState((user) => {
+  if (user) {
+    console.log('User logged in:', user.email);
+    console.log('Token stored in localStorage');
+    // Update UI for authenticated state
+  } else {
+    console.log('User logged out');
+    // Redirect to login or update UI
+  }
+});
+```
+
+**Implementation:**
+
+```javascript
+export function monitorAuthState(callback) {
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      // Get ID token and store locally
+      const token = await user.getIdToken();
+      localStorage.setItem('auth_token', token);
+      callback(user);
+    } else {
+      localStorage.removeItem('auth_token');
+      callback(null);
+    }
+  });
+}
+```
+
+### Token Refresh
+
+Firebase automatically refreshes tokens every hour. To force a refresh:
+
+```javascript
+const user = auth.currentUser;
+if (user) {
+  const freshToken = await user.getIdToken(true); // force refresh
+  localStorage.setItem('auth_token', freshToken);
+}
+```
+
+## Custom Claims (Admin Access)
+
+S-Parking uses Firebase custom claims to implement admin privileges. Custom claims are set via Firebase Admin SDK (server-side only).
+
+### Setting Admin Claims (Backend)
+
+```javascript
+// Run via Firebase Admin SDK or Cloud Function
+const admin = require('firebase-admin');
+
+await admin.auth().setCustomUserClaims(uid, { admin: true });
+console.log(`Admin privileges granted to user: ${uid}`);
+```
+
+### Checking Admin Status (Client)
+
+```javascript
+const user = auth.currentUser;
+if (user) {
+  const idTokenResult = await user.getIdTokenResult();
+  
+  if (idTokenResult.claims.admin === true) {
+    console.log('User is admin');
+    // Show admin UI components
+  } else {
+    console.log('User is regular user');
+  }
+}
+```
+
+### Admin-Protected Features
+
+Features that require admin access:
+
+<CardGroup cols={2}>
+  <Card title="Create Parking Spots" icon="plus">
+    Add new spots to the system
+  </Card>
+  <Card title="Delete Parking Spots" icon="trash">
+    Remove spots from the database
+  </Card>
+  <Card title="Manage Zones" icon="layer-group">
+    Create, update, and delete zones
+  </Card>
+  <Card title="View Analytics" icon="chart-bar">
+    Access occupancy history and reports
+  </Card>
+</CardGroup>
+
+### Client-Side Admin Check Example
+
+```javascript
+async function checkAdminAccess() {
+  const user = auth.currentUser;
+  
+  if (!user) {
+    window.location.href = '/login.html';
+    return false;
+  }
+  
+  const tokenResult = await user.getIdTokenResult();
+  
+  if (!tokenResult.claims.admin) {
+    alert('Acceso denegado. Se requieren privilegios de administrador.');
+    window.location.href = '/dashboard.html';
+    return false;
+  }
+  
+  return true;
+}
+
+// Use in admin pages
+if (!await checkAdminAccess()) {
+  // Redirect or hide admin features
+}
+```
+
+## Firestore Security Rules
+
+Firestore rules enforce authentication and admin checks server-side:
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Public read for parking_spots (anyone can view parking status)
+    match /parking_spots/{spotId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.token.admin == true;
+    }
+    
+    // Public read for zones
+    match /parking_zones/{zoneId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.token.admin == true;
+    }
+    
+    // Admin-only access for occupancy_history
+    match /occupancy_history/{docId} {
+      allow read, write: if request.auth != null && request.auth.token.admin == true;
+    }
+  }
+}
+```
+
+## Login Page Implementation
+
+Example login page integration:
+
+```html
+<!-- login.html -->
+<form id="loginForm">
+  <input type="email" id="email" placeholder="Email" required>
+  <input type="password" id="password" placeholder="Contraseña" required>
+  <button type="submit">Iniciar Sesión</button>
+</form>
+
+<script type="module">
+import { loginUser, monitorAuthState } from './js/auth/auth.js';
+
+// Monitor auth state
+monitorAuthState((user) => {
+  if (user) {
+    window.location.href = '/dashboard.html';
+  }
+});
+
+// Handle login form
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  
+  const result = await loginUser(email, password);
+  
+  if (result.success) {
+    // Redirect handled by auth state observer
+  } else {
+    alert(result.message);
+  }
+});
+</script>
+```
+
+## Protected Routes
+
+Implement route protection in the dashboard:
+
+```javascript
+// dashboard.html
+import { monitorAuthState } from './js/auth/auth.js';
+
+monitorAuthState(async (user) => {
+  if (!user) {
+    // Not logged in - redirect to login
+    window.location.href = '/login.html';
+    return;
+  }
+  
+  // Check admin status
+  const tokenResult = await user.getIdTokenResult();
+  const isAdmin = tokenResult.claims.admin === true;
+  
+  // Show/hide admin features
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = isAdmin ? 'block' : 'none';
+  });
+  
+  // Initialize dashboard
+  console.log(`Welcome ${user.email} (Admin: ${isAdmin})`);
+});
+```
+
+## Security Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Require Email Verification" icon="envelope-circle-check">
+    Block login until email is verified to prevent fake accounts.
+  </Card>
+  <Card title="Use HTTPS Only" icon="shield-halved">
+    Firebase Hosting enforces HTTPS automatically.
+  </Card>
+  <Card title="Implement Rate Limiting" icon="gauge-high">
+    Firebase Auth has built-in rate limiting for failed attempts.
+  </Card>
+  <Card title="Server-Side Validation" icon="server">
+    Always verify tokens server-side before granting access.
+  </Card>
+  <Card title="Rotate API Keys" icon="rotate">
+    Rotate Firebase API keys periodically via Firebase Console.
+  </Card>
+  <Card title="Monitor Auth Logs" icon="clipboard-list">
+    Review authentication logs in Firebase Console regularly.
+  </Card>
+</CardGroup>
+
+## Token Validation in Cloud Functions
+
+Validate Firebase tokens in Cloud Functions for protected endpoints:
+
+```javascript
+const admin = require('firebase-admin');
+admin.initializeApp();
+
+exports.protectedFunction = async (req, res) => {
+  const token = req.headers.authorization?.split('Bearer ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No authorization token' });
+  }
+  
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const uid = decodedToken.uid;
+    const isAdmin = decodedToken.admin === true;
+    
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    // Proceed with protected operation
+    res.status(200).json({ success: true });
+    
+  } catch (error) {
+    console.error('Token verification failed:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+```
+
+## Creating Admin Users
+
+To create your first admin user:
+
+1. **Register via web UI**: Create account at `/login.html`
+2. **Get User ID**: Find UID in Firebase Console > Authentication > Users
+3. **Set Custom Claim**: Run via Firebase CLI or Cloud Function:
+
+```bash
+firebase functions:shell
+
+# In shell:
+const admin = require('firebase-admin');
+admin.auth().setCustomUserClaims('USER_UID_HERE', { admin: true });
+```
+
+4. **Force Token Refresh**: User must log out and log back in for claims to take effect
+
+## Troubleshooting
+
+<Tabs>
+  <Tab title="Token Expired">
+    **Issue**: "Token has expired" error
+    
+    **Solution**: Force token refresh
+    ```javascript
+    const token = await user.getIdToken(true);
+    ```
+  </Tab>
+  <Tab title="Custom Claims Not Working">
+    **Issue**: Admin claims not visible after setting
+    
+    **Solution**: User must re-authenticate
+    ```javascript
+    await logoutUser();
+    // Ask user to log in again
+    ```
+  </Tab>
+  <Tab title="CORS Errors">
+    **Issue**: Firebase Auth blocked by CORS
+    
+    **Solution**: Add domain to Firebase Console > Authentication > Settings > Authorized domains
+  </Tab>
+</Tabs>

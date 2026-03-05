@@ -1,0 +1,245 @@
+---
+title: "Create Parking Spot"
+description: "Create or update a parking spot with location and metadata"
+---
+
+## Overview
+
+The `createParkingSpot` endpoint creates a new parking spot or updates an existing one using merge semantics. It's typically used during system setup or when adding new spots to the parking system.
+
+## Endpoint
+
+```
+POST /create-parking-spot
+```
+
+## Authentication
+
+CORS-enabled endpoint with wildcard origin (`*`). Should be restricted to admin users in production.
+
+## Request Body
+
+<ParamField path="id" type="string" required>
+  Unique identifier for the parking spot (e.g., "A-01", "I-16"). Will be trimmed and converted to uppercase.
+</ParamField>
+
+<ParamField path="lat" type="number" required>
+  Latitude coordinate of the parking spot location (e.g., -33.4489)
+</ParamField>
+
+<ParamField path="lng" type="number" required>
+  Longitude coordinate of the parking spot location (e.g., -70.6693)
+</ParamField>
+
+<ParamField path="desc" type="string">
+  Human-readable description of the spot. Defaults to "Puesto {id}" if not provided.
+</ParamField>
+
+<ParamField path="zone_id" type="string">
+  ID of the zone this spot belongs to (e.g., "zone_1764307623391"). Defaults to `null` if not provided.
+</ParamField>
+
+<ParamField path="status" type="integer">
+  Initial status of the parking spot:
+  - `0`: Occupied
+  - `1`: Available (default)
+  - `2`: Reserved
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Indicates whether the operation was successful
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Result message: "Puesto creado/actualizado"
+</ResponseField>
+
+<ResponseField name="spot" type="object">
+  The created/updated spot object with all fields
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message (only present on failure)
+</ResponseField>
+
+### Success Response
+
+- **200 OK** - Spot created or updated successfully
+- **204 No Content** - OPTIONS preflight response
+
+### Error Responses
+
+- **400 Bad Request** - Missing or invalid parameters:
+  - Missing `id` field
+  - Invalid coordinates (lat/lng are not numbers)
+
+- **500 Internal Server Error** - Database or server error
+
+## Merge Semantics
+
+The function uses Firestore's `merge: true` option:
+
+- **If spot exists**: Updates only the provided fields, preserves existing fields
+- **If spot doesn't exist**: Creates new document with all provided fields
+
+This allows safe updates without overwriting reservation data or other fields.
+
+## Code Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/create-parking-spot \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "A-01",
+    "lat": -33.4489,
+    "lng": -70.6693,
+    "desc": "Federico Froebel Zone - Spot 1",
+    "zone_id": "zone_1764307623391",
+    "status": 1
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/create-parking-spot',
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: 'A-01',
+      lat: -33.4489,
+      lng: -70.6693,
+      desc: 'Federico Froebel Zone - Spot 1',
+      zone_id: 'zone_1764307623391',
+      status: 1
+    })
+  }
+);
+
+const result = await response.json();
+
+if (result.success) {
+  console.log('Spot created:', result.spot);
+} else {
+  console.error('Error:', result.error);
+}
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/create-parking-spot',
+    json={
+        'id': 'A-01',
+        'lat': -33.4489,
+        'lng': -70.6693,
+        'desc': 'Federico Froebel Zone - Spot 1',
+        'zone_id': 'zone_1764307623391',
+        'status': 1
+    }
+)
+
+result = response.json()
+
+if result.get('success'):
+    print('Spot created:', result['spot'])
+else:
+    print('Error:', result.get('error'))
+```
+
+</CodeGroup>
+
+## Success Response Example
+
+```json
+{
+  "success": true,
+  "message": "Puesto creado/actualizado",
+  "spot": {
+    "id": "A-01",
+    "lat": -33.4489,
+    "lng": -70.6693,
+    "desc": "Federico Froebel Zone - Spot 1",
+    "status": 1,
+    "zone_id": "zone_1764307623391"
+  }
+}
+```
+
+## Error Response Examples
+
+### Missing ID
+```json
+{
+  "error": "Falta el ID del puesto"
+}
+```
+
+### Invalid Coordinates
+```json
+{
+  "error": "Coordenadas inválidas (lat/lng deben ser números)"
+}
+```
+
+## Firestore Data Structure
+
+The created/updated document in `parking_spots` collection:
+
+```javascript
+{
+  id: "A-01",
+  lat: -33.4489,
+  lng: -70.6693,
+  desc: "Federico Froebel Zone - Spot 1",
+  status: 1,
+  zone_id: "zone_1764307623391",
+  created_at: Timestamp,
+  updated_at: Timestamp
+}
+```
+
+## Data Processing
+
+- **ID normalization**: Trimmed and converted to uppercase ("a-01" → "A-01")
+- **Coordinate validation**: Parsed as floats and validated as numbers
+- **Default values**:
+  - `status`: `1` (Available) if not provided
+  - `desc`: "Puesto {id}" if not provided
+  - `zone_id`: `null` if not provided
+- **Timestamps**: Automatically set `created_at` and `updated_at`
+
+## Bulk Creation Pattern
+
+For creating multiple spots, call this endpoint in parallel:
+
+```javascript
+const spots = [
+  { id: 'A-01', lat: -33.4489, lng: -70.6693, zone_id: 'zone_1764307623391' },
+  { id: 'A-02', lat: -33.4490, lng: -70.6694, zone_id: 'zone_1764307623391' },
+  { id: 'A-03', lat: -33.4491, lng: -70.6695, zone_id: 'zone_1764307623391' },
+];
+
+const results = await Promise.all(
+  spots.map(spot =>
+    fetch('/create-parking-spot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spot)
+    }).then(r => r.json())
+  )
+);
+
+console.log(`Created ${results.filter(r => r.success).length} spots`);
+```
+
+## Related Endpoints
+
+- [Delete Parking Spot](/api/delete-parking-spot) - Remove a parking spot
+- [Manage Zones](/api/manage-zones) - Create zones before assigning spots
+- [Get Parking Status](/api/get-parking-status) - Verify spot was created successfully

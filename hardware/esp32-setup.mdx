@@ -1,0 +1,282 @@
+---
+title: ESP32 Setup & Configuration
+description: Configure ESP32 boards, WiFi credentials, and flash S-Parking firmware
+---
+
+This guide walks through setting up your ESP32 development board for the S-Parking system.
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+- ESP32 development board (NodeMCU-32S or similar)
+- Arduino IDE 1.8.x or 2.x
+- USB cable (usually USB-A to Micro-USB)
+- WiFi network with 2.4 GHz support (ESP32 doesn't support 5 GHz)
+
+## Arduino IDE Configuration
+
+<Steps>
+  <Step title="Install ESP32 Board Support">
+    Add the ESP32 board manager URL:
+    
+    1. Open Arduino IDE
+    2. Go to **File → Preferences**
+    3. Add this URL to "Additional Board Manager URLs":
+    
+    ```
+    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    ```
+    
+    4. Go to **Tools → Board → Boards Manager**
+    5. Search for "esp32" and install "esp32 by Espressif Systems"
+  </Step>
+  
+  <Step title="Install Required Libraries">
+    Install these libraries via **Sketch → Include Library → Manage Libraries**:
+    
+    - `Adafruit VL53L0X` (for sensor communication)
+    - `ArduinoJson` (for JSON parsing)
+    - `HTTPClient` (usually pre-installed with ESP32 core)
+    
+    <Warning>
+      Make sure to install **ArduinoJson version 6.x**, not 7.x. The firmware uses v6 API.
+    </Warning>
+  </Step>
+  
+  <Step title="Select Board and Port">
+    In the Arduino IDE:
+    
+    - **Board**: Tools → Board → ESP32 Arduino → "ESP32 Dev Module" or your specific board
+    - **Port**: Tools → Port → Select the COM/USB port where your ESP32 is connected
+    - **Upload Speed**: 115200 (can be increased to 921600 for faster uploads)
+  </Step>
+</Steps>
+
+## WiFi Configuration
+
+### Creating secrets.h File
+
+The firmware uses a `arduino_secrets.h` file to store sensitive credentials. This file is **not** committed to version control.
+
+<Steps>
+  <Step title="Copy the Example File">
+    Navigate to `workspace/source/firmware/S-Parking/` and copy:
+    
+    ```bash
+    cp arduino_secrets.example.h arduino_secrets.h
+    ```
+  </Step>
+  
+  <Step title="Edit Configuration">
+    Open `arduino_secrets.h` and fill in your actual values:
+    
+    ```cpp
+    #pragma once
+    
+    // --- WiFi Credentials ---
+    #define SECRET_SSID "YourWiFiNetwork"
+    #define SECRET_PASS "YourWiFiPassword"
+    
+    // --- Google Cloud URLs ---
+    #define SECRET_GCP_URL_INGEST "https://your-ingest-url.run.app"
+    #define SECRET_GCP_URL_GET "https://your-get-status-url.run.app"
+    
+    // --- Spot Identification ---
+    #define SECRET_SPOT_ID "A-01"
+    ```
+  </Step>
+</Steps>
+
+### Configuration Parameters
+
+<ParamField path="SECRET_SSID" type="string" required>
+  Your WiFi network name (SSID). Must be a 2.4 GHz network.
+</ParamField>
+
+<ParamField path="SECRET_PASS" type="string" required>
+  WiFi password for authentication.
+</ParamField>
+
+<ParamField path="SECRET_GCP_URL_INGEST" type="string" required>
+  Cloud Run URL for the `ingest-parking-data` function. Used to send sensor status updates.
+</ParamField>
+
+<ParamField path="SECRET_GCP_URL_GET" type="string" required>
+  Cloud Run URL for the `get-parking-status` function. Used to retrieve reservation status.
+</ParamField>
+
+<ParamField path="SECRET_SPOT_ID" type="string" required>
+  Unique identifier for this parking spot (e.g., "A-01", "B-12"). Must match the spot ID in your Firestore database.
+</ParamField>
+
+<Warning>
+  **Never commit `arduino_secrets.h` to version control!** It contains sensitive credentials.
+  
+  The `.gitignore` should include:
+  ```
+  arduino_secrets.h
+  ```
+</Warning>
+
+## WiFi Connection Logic
+
+The firmware implements robust WiFi connection from `S-Parking.ino:205-228`:
+
+```cpp
+void connectToWiFi() {
+  Serial.print("Conectando a WiFi: ");
+  Serial.println(ssid);
+  
+  WiFi.mode(WIFI_STA); // Station mode
+  WiFi.begin(ssid, password);
+  
+  int intentos = 0;
+  while (WiFi.status() != WL_CONNECTED && intentos < 20) {
+    delay(500);
+    Serial.print(".");
+    intentos++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n¡WiFi Conectado!");
+    Serial.print("IP asignada: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nFallo al conectar WiFi. Reiniciando...");
+    delay(1000);
+    ESP.restart(); // Auto-restart on failure
+  }
+}
+```
+
+### Connection Behavior
+
+- **Retry Logic**: Attempts connection 20 times (10 seconds total)
+- **Auto-Restart**: If connection fails, ESP32 restarts automatically
+- **Station Mode**: Uses `WIFI_STA` mode (not AP mode)
+- **Serial Feedback**: Prints connection status to Serial Monitor at 115200 baud
+
+## Flashing Firmware
+
+<Steps>
+  <Step title="Open the Project">
+    In Arduino IDE, open `S-Parking/S-Parking.ino`
+  </Step>
+  
+  <Step title="Verify Configuration">
+    Ensure `arduino_secrets.h` exists and contains valid credentials.
+  </Step>
+  
+  <Step title="Compile and Upload">
+    1. Click the **Verify** button (checkmark) to compile
+    2. Fix any compilation errors
+    3. Click the **Upload** button (arrow) to flash
+    4. Wait for "Done uploading" message
+  </Step>
+  
+  <Step title="Monitor Serial Output">
+    Open Serial Monitor (**Tools → Serial Monitor**) at **115200 baud**:
+    
+    ```
+    Conectando a WiFi: YourNetwork
+    ...........
+    ¡WiFi Conectado!
+    IP asignada: 192.168.1.42
+    Cambio físico detectado: 1
+    Enviado a ingest. Codigo: 200
+    Sincronizando. Local: 1 | Nube: 1
+    ```
+  </Step>
+</Steps>
+
+### Common Upload Issues
+
+<AccordionGroup>
+  <Accordion title="Port not found">
+    - **Windows**: Install CP210x or CH340 USB drivers
+    - **macOS**: Driver usually automatic, check System Report → USB
+    - **Linux**: Add user to `dialout` group: `sudo usermod -a -G dialout $USER`
+  </Accordion>
+  
+  <Accordion title="Failed to connect to ESP32">
+    - Hold the **BOOT** button while clicking Upload
+    - Try reducing upload speed to 115200
+    - Check USB cable (some cables are power-only)
+  </Accordion>
+  
+  <Accordion title="Brownout detector triggered">
+    - Power supply insufficient (use USB 3.0 port or powered hub)
+    - Reduce WiFi power: Add `WiFi.setTxPower(WIFI_POWER_19_5dBm);` after `WiFi.begin()`
+  </Accordion>
+  
+  <Accordion title="WiFi won't connect">
+    - Verify SSID and password are correct
+    - Ensure 2.4 GHz WiFi (not 5 GHz)
+    - Check if network has MAC filtering or captive portal
+    - Move ESP32 closer to router during testing
+  </Accordion>
+</AccordionGroup>
+
+## Secrets Structure Reference
+
+The `arduino_secrets.h` file structure:
+
+```cpp
+#pragma once
+
+// --- CREDENCIALES WIFI ---
+#define SECRET_SSID "NOMBRE_DE_TU_WIFI"
+#define SECRET_PASS "PASSWORD_DE_TU_WIFI"
+
+// --- TUS URLs DE GOOGLE CLOUD ---
+
+// 1. URL para ENVIAR datos (ingest-parking-data)
+#define SECRET_GCP_URL_INGEST "https://tu-url-ingest.run.app"
+
+// 2. URL para LEER estado (get-parking-status)
+// NOTA: Esta funcion devuelve TODOS los puestos.
+// El ESP32 buscará su ID en la lista.
+#define SECRET_GCP_URL_GET "https://tu-url-get-status.run.app"
+
+// 3. Identificación del Puesto
+#define SECRET_SPOT_ID "A-01"
+```
+
+<Warning>
+  The GET endpoint returns **all parking spots**. The ESP32 searches the JSON array for its specific `spot_id`. Make sure the ID matches exactly (case-sensitive).
+</Warning>
+
+## Testing Connectivity
+
+After flashing, verify the system works:
+
+1. **Check Serial Monitor** for WiFi connection confirmation
+2. **Verify LED lights up green** (if no car present)
+3. **Place hand over sensor** - LED should turn red immediately
+4. **Check cloud logs** in GCP console for incoming requests
+5. **Monitor state synchronization** every 15 seconds
+
+Expected Serial output:
+
+```
+Conectando a WiFi: MyNetwork
+...
+¡WiFi Conectado!
+IP asignada: 192.168.1.100
+Cambio físico detectado: 1
+Enviado a ingest. Codigo: 200
+Sincronizando. Local: 1 | Nube: 1
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Sensor Calibration" icon="ruler" href="/hardware/sensor-calibration">
+    Calibrate distance thresholds for accurate detection
+  </Card>
+  
+  <Card title="LED Indicators" icon="lightbulb" href="/hardware/led-indicators">
+    Wire and configure RGB LED indicators
+  </Card>
+</CardGroup>

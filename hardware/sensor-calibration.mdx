@@ -1,0 +1,360 @@
+---
+title: Sensor Calibration
+description: Calibrate VL53L0X sensors, set distance thresholds, and optimize physical installation
+---
+
+Proper sensor calibration is critical for accurate parking space detection. This guide covers VL53L0X configuration, distance thresholds, and installation best practices.
+
+## VL53L0X Sensor Overview
+
+The VL53L0X is a time-of-flight (ToF) laser ranging sensor that measures distances by calculating the time light takes to bounce back from objects.
+
+### Key Characteristics
+
+- **Measurement Range**: 30mm to 2000mm (approximately 3cm to 2 meters)
+- **Accuracy**: ±3% at typical distances
+- **Field of View**: 25° cone
+- **Measurement Time**: ~30ms per reading
+- **Interface**: I2C (default address 0x29)
+
+## Distance Thresholds
+
+The firmware uses a fixed threshold to determine occupancy from `S-Parking.ino:78-82`:
+
+```cpp
+if (measure.RangeStatus != 4 && measure.RangeMilliMeter < 400) {
+  nuevoEstadoSensor = 0; // Ocupado fisicamente (Occupied)
+} else {
+  nuevoEstadoSensor = 1; // Disponible fisicamente (Available)
+}
+```
+
+<ParamField path="THRESHOLD" type="millimeters" default="400">
+  **Distance threshold for occupancy detection**
+  
+  - **Less than 400mm** → Space is occupied (status = 0)
+  - **Greater than 400mm** → Space is available (status = 1)
+  - **RangeStatus = 4** → Out of range or no valid measurement
+</ParamField>
+
+### Why 400mm?
+
+The 400mm (40cm) threshold is chosen because:
+
+1. **Car undercarriage height**: Most vehicles have ground clearance of 150-250mm
+2. **Sensor mounting height**: Typically 2-3 meters above ground
+3. **Safety margin**: 400mm provides buffer against false positives from debris or puddles
+4. **Reliable detection**: Large difference between "car present" and "empty space"
+
+<Warning>
+  The threshold of 400mm assumes the sensor is mounted at **ceiling height (2-3 meters)**. If you mount the sensor differently, you'll need to adjust this value.
+</Warning>
+
+## Calibration Process
+
+<Steps>
+  <Step title="Measure Installation Height">
+    Determine the actual mounting height of your sensor:
+    
+    - **Ceiling mount**: 2.5 - 3.0 meters typical
+    - **Pole mount**: 2.0 - 2.5 meters typical
+    - **Ground mount**: Not recommended (sensor will see car undercarriage)
+    
+    Record this value for threshold calculation.
+  </Step>
+  
+  <Step title="Test Empty Space Reading">
+    With the parking space empty, check the sensor reading:
+    
+    1. Open Serial Monitor at 115200 baud
+    2. Add temporary debug code to print raw values:
+    
+    ```cpp
+    void readLocalSensor() {
+      VL53L0X_RangingMeasurementData_t measure;
+      sensor.rangingTest(&measure, false);
+      
+      // DEBUG: Print raw sensor values
+      Serial.print("Range: ");
+      Serial.print(measure.RangeMilliMeter);
+      Serial.print(" mm, Status: ");
+      Serial.println(measure.RangeStatus);
+      
+      // ... rest of function
+    }
+    ```
+    
+    3. Note the typical empty space reading (should be close to installation height)
+  </Step>
+  
+  <Step title="Test Occupied Space Reading">
+    Park a vehicle in the space and observe the readings:
+    
+    - Most vehicles will show 1500-2000mm (sensor sees car roof, not ground)
+    - Some low-profile vehicles may show 1200-1500mm
+    - SUVs/trucks may show 1800-2200mm
+    
+    <Warning>
+      If readings are inconsistent, check:
+      - Sensor is pointed straight down (not angled)
+      - Field of view isn't obstructed
+      - Vehicle is properly centered in the space
+    </Warning>
+  </Step>
+  
+  <Step title="Calculate Threshold">
+    Choose a threshold value between empty and occupied readings:
+    
+    ```
+    Threshold = (Empty Reading + Occupied Reading) / 2
+    ```
+    
+    **Example calculation:**
+    - Empty space: 2500mm
+    - With car: 1800mm
+    - Threshold: (2500 + 1800) / 2 = 2150mm
+    
+    Round down for safety margin: **2000mm** or **2100mm**
+  </Step>
+  
+  <Step title="Update Firmware">
+    Modify the threshold in `S-Parking.ino:78`:
+    
+    ```cpp
+    if (measure.RangeStatus != 4 && measure.RangeMilliMeter < 2000) {
+      nuevoEstadoSensor = 0; // Occupied
+    }
+    ```
+    
+    Re-upload the firmware and test thoroughly.
+  </Step>
+</Steps>
+
+## Physical Installation Guidelines
+
+### Optimal Mounting Height
+
+The sensor should be mounted **directly above the center of the parking space**:
+
+```
+        [Ceiling/Mounting Surface]
+                  |
+                  | 2.5m - 3.0m
+                  |
+              [VL53L0X]    ← Pointed straight down
+                  |
+                  | 25° field of view
+                  ∨
+        [====================]
+        [   Parking Space    ]
+        [====================]
+```
+
+### Mounting Recommendations
+
+<AccordionGroup>
+  <Accordion title="Ceiling Mount (Recommended)">
+    **Best for:** Indoor garages, covered parking structures
+    
+    - Mount sensor 2.5-3.0 meters above ground
+    - Point directly downward (perpendicular to ground)
+    - Use weatherproof enclosure if needed
+    - Ensure stable mounting (no vibration)
+    
+    **Advantages:**
+    - Most reliable readings
+    - Protected from weather
+    - Wide detection area
+  </Accordion>
+  
+  <Accordion title="Pole Mount">
+    **Best for:** Open parking lots, temporary installations
+    
+    - Mount sensor 2.0-2.5 meters high on pole
+    - Position at edge of parking space, angled toward center
+    - Account for angle in threshold calculations
+    - Use sturdy pole to prevent swaying
+    
+    **Considerations:**
+    - Requires trigonometry for threshold adjustment
+    - More susceptible to weather
+    - May need recalibration after wind/vibration
+  </Accordion>
+  
+  <Accordion title="Wall Mount">
+    **Best for:** Perpendicular parking against walls
+    
+    - Mount on wall at front of space
+    - Sensor points horizontally toward parking space
+    - Threshold measures distance to car front
+    - Height: 0.8-1.2 meters (bumper to mid-door level)
+    
+    **Considerations:**
+    - Different threshold range (detect car presence, not distance to ground)
+    - Use shorter threshold (e.g., 1500mm for detection)
+    - May miss motorcycles or compact vehicles
+  </Accordion>
+</AccordionGroup>
+
+### Installation Checklist
+
+- [ ] Sensor is securely mounted (no movement or vibration)
+- [ ] Field of view covers entire parking space
+- [ ] No obstructions between sensor and ground (pipes, lights, etc.)
+- [ ] Sensor lens is clean and free of debris
+- [ ] Weatherproofing applied if outdoors
+- [ ] Cable routing is secure and protected
+- [ ] Power supply is stable (no voltage drops)
+- [ ] Tested with multiple vehicle types
+
+## Handling Edge Cases
+
+### RangeStatus Error Codes
+
+The VL53L0X returns a `RangeStatus` value indicating measurement quality:
+
+| Status | Meaning | Firmware Handling |
+|--------|---------|-------------------|
+| **0** | Valid measurement | Use reading |
+| **1** | Sigma fail (low signal) | May be valid |
+| **2** | Signal fail (no return) | Treat as out of range |
+| **4** | Out of range | Treat as available |
+
+From `S-Parking.ino:78`, status 4 is explicitly checked:
+
+```cpp
+if (measure.RangeStatus != 4 && measure.RangeMilliMeter < 400) {
+  // Status is good (0, 1, or 2) AND distance is close
+  nuevoEstadoSensor = 0; // Occupied
+}
+```
+
+### Common Calibration Issues
+
+<AccordionGroup>
+  <Accordion title="Sensor always shows occupied">
+    **Symptoms:** LED always red, even when space is empty
+    
+    **Possible causes:**
+    - Threshold too high (detects ground as occupied)
+    - Sensor pointed at angle (sees nearby wall/object)
+    - Obstruction in field of view
+    
+    **Solutions:**
+    - Lower threshold value
+    - Adjust sensor angle to point straight down
+    - Remove obstructions
+    - Check for debris on sensor lens
+  </Accordion>
+  
+  <Accordion title="Sensor always shows available">
+    **Symptoms:** LED stays green even with car present
+    
+    **Possible causes:**
+    - Threshold too low (doesn't detect cars)
+    - Mounting too high (out of sensor range)
+    - Sensor not pointed at parking space
+    
+    **Solutions:**
+    - Increase threshold value
+    - Lower mounting height
+    - Adjust sensor aim
+    - Test with serial monitor debug output
+  </Accordion>
+  
+  <Accordion title="Intermittent false positives">
+    **Symptoms:** LED flickers between red and green randomly
+    
+    **Possible causes:**
+    - Threshold too close to typical readings (no margin)
+    - Vibration causing measurement noise
+    - Objects passing through field of view (people, carts)
+    
+    **Solutions:**
+    - Add hysteresis (require 2-3 consistent readings before state change)
+    - Stabilize mounting
+    - Adjust threshold with larger safety margin
+    - Implement software filtering (moving average)
+  </Accordion>
+</AccordionGroup>
+
+## Advanced: Implementing Hysteresis
+
+To reduce false triggering, you can add hysteresis with two thresholds:
+
+```cpp
+#define THRESHOLD_OCCUPIED 350  // Below this = definitely occupied
+#define THRESHOLD_AVAILABLE 450 // Above this = definitely available
+// Between 350-450 = maintain previous state
+
+void readLocalSensor() {
+  VL53L0X_RangingMeasurementData_t measure;
+  sensor.rangingTest(&measure, false);
+
+  int nuevoEstadoSensor;
+
+  if (measure.RangeStatus != 4) {
+    if (measure.RangeMilliMeter < THRESHOLD_OCCUPIED) {
+      nuevoEstadoSensor = 0; // Definitely occupied
+    } else if (measure.RangeMilliMeter > THRESHOLD_AVAILABLE) {
+      nuevoEstadoSensor = 1; // Definitely available
+    } else {
+      nuevoEstadoSensor = estadoLocalSensor; // Maintain previous state
+    }
+  } else {
+    nuevoEstadoSensor = 1; // Out of range = available
+  }
+
+  // Only send update if state actually changed
+  if (nuevoEstadoSensor != estadoLocalSensor) {
+    estadoLocalSensor = nuevoEstadoSensor;
+    sendStateToCloud(estadoLocalSensor);
+  }
+}
+```
+
+This prevents rapid state changes when readings hover near the threshold.
+
+## Testing & Validation
+
+After calibration, perform comprehensive testing:
+
+<Steps>
+  <Step title="Basic Functionality">
+    - Empty space → Green LED
+    - Car parks → Red LED within 2 seconds
+    - Car leaves → Green LED within 2 seconds
+  </Step>
+  
+  <Step title="Vehicle Variety">
+    Test with different vehicle types:
+    - Sedans
+    - SUVs/Trucks
+    - Motorcycles (may need different threshold)
+    - Compact cars
+  </Step>
+  
+  <Step title="Environmental Conditions">
+    - Test in rain/snow (if outdoor)
+    - Test with shadows and sunlight changes
+    - Test with people walking near sensor
+  </Step>
+  
+  <Step title="Extended Operation">
+    - Monitor for 24 hours
+    - Check for drift or false triggers
+    - Verify cloud synchronization works correctly
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="LED Indicators" icon="lightbulb" href="/hardware/led-indicators">
+    Configure RGB LED wiring and behavior
+  </Card>
+  
+  <Card title="Hardware Overview" icon="microchip" href="/hardware/overview">
+    Review complete hardware architecture
+  </Card>
+</CardGroup>

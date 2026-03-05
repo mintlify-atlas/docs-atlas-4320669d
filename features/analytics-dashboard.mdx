@@ -1,0 +1,604 @@
+---
+title: "Analytics Dashboard"
+description: "Historical occupancy data, hourly snapshots, Chart.js visualizations, and trend analysis"
+icon: "chart-line"
+---
+
+## Overview
+
+S-Parking's analytics system captures **hourly snapshots** of parking occupancy and displays historical trends using **Chart.js**. The dashboard shows global and per-zone occupancy patterns, helping administrators optimize capacity and identify peak hours.
+
+## Hourly Snapshot System
+
+A Cloud Function runs every hour (via Cloud Scheduler) to capture occupancy data:
+
+```javascript
+// gcp-functions/save-hourly-snapshot/index.js:5-11
+function buildHourKey(date = new Date()) {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  const h = String(date.getUTCHours()).padStart(2, '0');
+  return `${y}-${m}-${d}-${h}`; // UTC for consistency
+}
+```
+
+<Note>
+**Hour Key Format**: `2026-03-05-14` represents 2:00 PM UTC on March 5, 2026. Using UTC ensures consistent time handling across timezones.
+</Note>
+
+## Snapshot Data Structure
+
+```javascript
+// gcp-functions/save-hourly-snapshot/index.js:159-186
+const docData = {
+  hour_key: hourKey,
+  timestamp: targetDate.toISOString(),
+  ts: targetDate.getTime(), // numeric timestamp for efficient queries
+  global: {
+    free: globalCounts.free || 0,
+    occupied: globalCounts.occupied || 0,
+    reserved: globalCounts.reserved || 0,
+    total: globalCounts.total || 0,
+    occupancyPct
+  },
+  zones: {},
+  created_at: targetDate
+};
+
+Object.keys(zonesMap).forEach(zoneId => {
+    const z = zonesMap[zoneId];
+    const occPlusRes = (z.occupied || 0) + (z.reserved || 0);
+    const pct = z.total ? Math.round((occPlusRes / z.total) * 100) : 0;
+    
+    docData.zones[zoneId] = {
+        free: z.free || 0,
+        occupied: z.occupied || 0,
+        reserved: z.reserved || 0,
+        total: z.total || 0,
+        occupancyPct: pct
+    };
+});
+```
+
+<CardGroup cols={2}>
+  <Card title="Global Stats" icon="globe">
+    Total occupancy across all parking spots
+  </Card>
+  <Card title="Zone Stats" icon="map-pin">
+    Per-zone breakdown with individual percentages
+  </Card>
+</CardGroup>
+
+## Data Retention
+
+Snapshots are automatically cleaned up after 30 days:
+
+```javascript
+// gcp-functions/save-hourly-snapshot/index.js:192-210
+const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+const oldQuery = await firestore
+  .collection('occupancy_history')
+  .where('ts', '<', cutoffMs)
+  .get();
+
+let deleted = 0;
+if (!oldQuery.empty) {
+  const batch = firestore.batch();
+  oldQuery.docs.forEach(doc => {
+    batch.delete(doc.ref);
+    deleted += 1;
+  });
+  await batch.commit();
+  console.log(`🧹 Retention applied. Documents deleted: ${deleted}`);
+}
+```
+
+<Note>
+**Cost Optimization**: 30-day retention balances historical insights with Firestore storage costs. Adjust based on your needs.
+</Note>
+
+## Fetching Historical Data
+
+The client fetches historical data with configurable time ranges:
+
+```javascript
+// js/api/history.js:17-49
+export async function fetchOccupancyHistory(days = 1, zoneId = null) {
+    const now = Date.now();
+    const cacheKey = `${days}_${zoneId || 'all'}`;
+    
+    // Return cache if valid
+    if (cachedHistory && cachedHistory.key === cacheKey && 
+        cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION)) {
+        console.log('📦 Using cached history');
+        return cachedHistory.data;
+    }
+
+    try {
+        const params = new URLSearchParams({ days: days.toString() });
+        if (zoneId) params.append('zoneId', zoneId);
+        
+        const url = `${HISTORY_API_URL}?${params.toString()}`;
+        console.log(`📥 Fetching history: ${days} days${zoneId ? ' zone=' + zoneId : ''}`);
+        
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const data = await response.json();
+        
+        // Cache result
+        cachedHistory = { key: cacheKey, data };
+        cacheTimestamp = now;
+        
+        console.log(`✅ History fetched: ${data.count} samples`);
+        return data;
+    } catch (error) {
+        console.error('❌ Error fetching history:', error);
+        return { success: false, days, count: 0, samples: [] };
+    }
+}
+```
+
+<Accordion title="Cache Duration">
+History data is cached for **10 minutes** to reduce API costs. Since hourly snapshots only update once per hour, frequent fetching is unnecessary.
+</Accordion>
+
+## Chart.js Visualization
+
+S-Parking uses Chart.js to render sparklines and detailed graphs:
+
+### Main Dashboard Chart
+
+```javascript
+// js/ui/charts.js:56-102
+hourlyChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: dataToShow.map((_, i) => i),
+        datasets: [{
+            data: dataToShow,
+            borderColor: '#3b82f6',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: {
+            padding: {
+                top: 5,
+                bottom: 5,
+                left: 0,
+                right: 0
+            }
+        },
+        plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                grace: '5%',
+                display: false,
+                grid: { display: false }
+            },
+            x: {
+                display: false,
+                grid: { display: false }
+            }
+        },
+        interaction: {
+            mode: 'none'
+        }
+    }
+});
+```
+
+<Note>
+**Minimalist Design**: The main chart hides axes and tooltips for a clean sparkline appearance. Detailed charts show full controls.
+</Note>
+
+### Zone Sparklines
+
+Each zone card displays a mini sparkline:
+
+```javascript
+// js/ui/charts.js:196-258
+export function createZoneSparkline(ctx, data, color = '#3b82f6') {
+    if (!ctx || !data || data.length === 0) return null;
+
+    // If only 1 point, duplicate it so Chart.js can draw
+    const chartData = data.length === 1 ? [data[0], data[0]] : data;
+
+    return new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: chartData.map((_, i) => i),
+            datasets: [{
+                data: chartData,
+                borderColor: color,
+                backgroundColor: 'transparent',
+                borderWidth: 1.5,
+                fill: false,
+                tension: 0.4,
+                pointRadius: data.length <= 3 ? 3 : 0,
+                pointHoverRadius: data.length <= 3 ? 4 : 0,
+                pointBackgroundColor: color,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { 
+                    enabled: data.length <= 10,
+                    callbacks: {
+                        label: (context) => `${context.parsed.y}% occupancy`
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grace: '5%',
+                    display: false,
+                    grid: { display: false }
+                },
+                x: {
+                    display: false,
+                    grid: { display: false }
+                }
+            },
+            interaction: { mode: data.length <= 10 ? 'index' : 'none' },
+            animation: {
+                duration: 400
+            }
+        }
+    });
+}
+```
+
+## Expanded Chart Modal
+
+Clicking the main chart opens a detailed view with interactive tooltips:
+
+```javascript
+// js/ui/charts.js:377-467
+export function initExpandedChart(ctx, historyData, samples) {
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: samples.map(s => new Date(s.ts)),
+            datasets: [{
+                label: 'Occupancy',
+                data: historyData,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+                axis: 'x'
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    suggestedMax: 105,
+                    grid: {
+                        color: 'rgba(148, 163, 184, 0.1)'
+                    },
+                    ticks: {
+                        callback: (value) => value <= 100 ? `${value}%` : '',
+                        color: '#64748b',
+                        font: { size: 11 },
+                        stepSize: 20
+                    }
+                },
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'hour',
+                        displayFormats: {
+                            hour: 'HH:mm'
+                        },
+                        tooltipFormat: 'DD MMM YYYY, HH:mm'
+                    },
+                    grid: {
+                        color: 'rgba(148, 163, 184, 0.1)'
+                    },
+                    ticks: {
+                        color: '#64748b',
+                        maxRotation: 0,
+                        autoSkip: true,
+                        maxTicksLimit: 12
+                    }
+                }
+            }
+        }
+    });
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Time-Series X-Axis" icon="clock">
+    Uses Chart.js time scale for proper date/time rendering
+  </Card>
+  <Card title="Filled Area" icon="fill">
+    Light blue fill shows occupancy range clearly
+  </Card>
+</CardGroup>
+
+## Trend Calculation
+
+The dashboard calculates occupancy trends:
+
+```javascript
+// js/api/history.js:123-129
+export function calculateTrend(data) {
+    if (!data || data.length < 2) return 0;
+    const first = data[0];
+    const last = data[data.length - 1];
+    if (first === 0) return last > 0 ? 100 : 0;
+    return Math.round(((last - first) / first) * 100);
+}
+```
+
+Trend indicators update in real-time:
+
+```javascript
+// js/main.js:341-365
+if (globalOccupancy.length >= 2) {
+    const current = Math.round(globalOccupancy[globalOccupancy.length - 1]);
+    const previous = Math.round(globalOccupancy[globalOccupancy.length - 2]);
+    const diff = current - previous;
+    const trendEl = document.getElementById('occupancy-trend');
+    const trendIcon = trendEl?.previousElementSibling;
+    
+    if (trendEl) {
+        trendEl.textContent = `${diff > 0 ? '+' : ''}${diff}%`;
+        
+        if (diff > 0) {
+            trendIcon.className = 'fa-solid fa-arrow-up text-red-600';
+            trendEl.className = 'text-red-700 font-bold';
+            trendEl.parentElement.className = 'flex items-center gap-1 px-2 py-1 bg-red-100 rounded-full';
+        } else if (diff < 0) {
+            trendIcon.className = 'fa-solid fa-arrow-down text-green-600';
+            trendEl.className = 'text-green-700 font-bold';
+            trendEl.parentElement.className = 'flex items-center gap-1 px-2 py-1 bg-green-100 rounded-full';
+        } else {
+            trendIcon.className = 'fa-solid fa-minus text-slate-600';
+            trendEl.className = 'text-slate-700 font-bold';
+            trendEl.parentElement.className = 'flex items-center gap-1 px-2 py-1 bg-slate-100 rounded-full';
+        }
+    }
+}
+```
+
+<Tabs>
+  <Tab title="Upward Trend">
+    🔴 Red arrow + badge: Occupancy increasing (more congestion)
+  </Tab>
+  <Tab title="Downward Trend">
+    🟢 Green arrow + badge: Occupancy decreasing (freeing up)
+  </Tab>
+  <Tab title="Stable">
+    ⚪ Gray minus + badge: No significant change
+  </Tab>
+</Tabs>
+
+## Peak Hour Detection
+
+The analytics modal identifies peak hours automatically:
+
+```javascript
+// js/main.js:733-749
+const samplesWithTime = historyData.samples.map((s, i) => ({
+    time: new Date(s.ts).toLocaleString('es-CL', { 
+        weekday: 'short', 
+        hour: '2-digit', 
+        minute: '2-digit' 
+    }),
+    value: s.global?.occupancyPct || 0,
+    index: i
+}));
+
+const topPeaks = [...samplesWithTime]
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 3);
+
+peakHoursEl.innerHTML = topPeaks.map(peak => `
+    <div class="flex justify-between items-center py-2 border-b">
+        <span class="font-semibold">${peak.time}</span>
+        <span class="text-rose-600 font-bold">${Math.round(peak.value)}%</span>
+    </div>
+`).join('');
+```
+
+## Recommendations Engine
+
+The system analyzes patterns and provides actionable recommendations:
+
+```javascript
+// js/main.js:752-826 (simplified)
+const avgOccupancy = globalOccupancy.reduce((a, b) => a + b, 0) / globalOccupancy.length;
+const variance = globalOccupancy.reduce((sum, val) => 
+    sum + Math.pow(val - avgOccupancy, 2), 0) / globalOccupancy.length;
+const stdDev = Math.sqrt(variance);
+const variability = stdDev / avgOccupancy * 100;
+
+const recommendations = [];
+
+if (criticalPercent > 30) {
+    recommendations.push({
+        icon: 'fa-triangle-exclamation',
+        color: 'text-rose-600',
+        text: 'High saturation detected. Consider expanding capacity.'
+    });
+}
+
+if (variability > 30) {
+    recommendations.push({
+        icon: 'fa-chart-line',
+        color: 'text-blue-600',
+        text: `Irregular demand (CV ${Math.round(variability)}%). Implement dynamic pricing.`
+    });
+}
+
+if (avgAvailability < 20) {
+    recommendations.push({
+        icon: 'fa-users',
+        color: 'text-amber-600',
+        text: `Low average availability (${Math.round(avgAvailability)}%). Review policies.`
+    });
+}
+```
+
+<AccordionGroup>
+  <Accordion title="Saturation Alert">
+    **Triggered when**: Occupancy > 80% for more than 30% of the period
+    
+    **Recommendation**: Expand capacity, add overflow areas, or implement waitlists
+  </Accordion>
+  
+  <Accordion title="High Variability">
+    **Triggered when**: Coefficient of variation > 30%
+    
+    **Recommendation**: Implement dynamic pricing, improve signage, or adjust marketing
+  </Accordion>
+  
+  <Accordion title="Low Availability">
+    **Triggered when**: Average availability < 20%
+    
+    **Recommendation**: Review maximum stay policies, increase turnover, or add spots
+  </Accordion>
+</AccordionGroup>
+
+## Data Extraction Utilities
+
+The history API provides utilities to extract specific data slices:
+
+```javascript
+// js/api/history.js:56-86
+export function extractGlobalOccupancy(samples) {
+    if (!samples || samples.length === 0) return [];
+    return samples.map(s => s.global?.occupancyPct || 0);
+}
+
+export function extractZoneOccupancy(samples, zoneId) {
+    if (!samples || samples.length === 0) return [];
+    
+    return samples.map((s) => {
+        // If sample has direct zone data
+        if (s.zone) return s.zone.occupancyPct || 0;
+        
+        // If it has zones_summary
+        if (s.zones_summary && Array.isArray(s.zones_summary)) {
+            const zone = s.zones_summary.find(z => z.id === zoneId);
+            if (zone) return zone.occupancyPct || 0;
+        }
+        
+        return 0;
+    });
+}
+
+export function aggregateGlobalFromZones(samples) {
+    if (!samples || samples.length === 0) return [];
+    return samples.map((s) => {
+        if (s.zones_summary && Array.isArray(s.zones_summary)) {
+            const zones = s.zones_summary.filter(z => 
+                z && z.id !== 'SinZona' && z.total > 0
+            );
+            if (zones.length > 0) {
+                const weightedSum = zones.reduce((sum, z) => {
+                    const occupiedPct = z.occupancyPct ?? 
+                        ((z.occupied + z.reserved) / z.total) * 100;
+                    return sum + (occupiedPct * z.total);
+                }, 0);
+                const totalCapacity = zones.reduce((t, z) => t + z.total, 0);
+                return Math.round(weightedSum / totalCapacity);
+            }
+        }
+        return s.global?.occupancyPct ?? 0;
+    });
+}
+```
+
+## Performance Optimization
+
+<CardGroup cols={2}>
+  <Card title="Chart Reuse" icon="recycle">
+    Existing Chart.js instances are destroyed before creating new ones to prevent memory leaks
+  </Card>
+  <Card title="Data Limiting" icon="filter">
+    Main chart shows maximum 48 data points to prevent UI slowdown
+  </Card>
+  <Card title="Lazy Rendering" icon="eye-slash">
+    Charts only render when visible (expanded modal uses setTimeout)
+  </Card>
+  <Card title="10-Minute Cache" icon="clock">
+    History data cached to reduce Firestore reads
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choosing Snapshot Frequency">
+    The default 1-hour interval balances cost and granularity:
+    
+    - **15-minute snapshots**: 4x cost, better for high-turnover lots
+    - **1-hour snapshots** (default): Ideal for most use cases
+    - **6-hour snapshots**: Minimal cost, sufficient for low-traffic lots
+    
+    Configure via Cloud Scheduler trigger frequency.
+  </Accordion>
+  
+  <Accordion title="Interpreting Trends">
+    Context matters when reading trends:
+    
+    - **Time of day**: Morning increases are normal for commuter lots
+    - **Day of week**: Weekend patterns differ significantly
+    - **Special events**: Concerts, games, etc. create anomalies
+    - **Seasonal changes**: Academic calendars affect university parking
+    
+    Use the expanded chart's date picker to compare similar time periods.
+  </Accordion>
+  
+  <Accordion title="Exporting Data">
+    For external analysis, export historical data:
+    
+    1. Query Firestore directly: `firestore.collection('occupancy_history')`
+    2. Use Cloud Functions to generate CSV exports
+    3. Connect BI tools (Tableau, Looker) to Firestore
+    4. Set up BigQuery sync for advanced analytics
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Real-Time Monitoring" icon="wifi" href="/features/real-time-monitoring">
+    How live data feeds into historical snapshots
+  </Card>
+  <Card title="Zone Management" icon="map-location-dot" href="/features/zone-management">
+    Per-zone analytics and sparklines
+  </Card>
+</CardGroup>

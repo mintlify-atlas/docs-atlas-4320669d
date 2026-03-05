@@ -1,0 +1,429 @@
+---
+title: Deploy to Firebase Hosting
+description: Deploy the S-Parking web dashboard to Firebase Hosting with optimized caching and HTTP/2
+---
+
+The S-Parking web dashboard is a vanilla JavaScript SPA deployed on **Firebase Hosting**, providing global CDN distribution, automatic SSL, and HTTP/2 support.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Firebase CLI">
+    ```bash
+    npm install -g firebase-tools
+    ```
+  </Step>
+
+  <Step title="Login to Firebase">
+    ```bash
+    firebase login
+    ```
+    This opens a browser window for Google authentication.
+  </Step>
+
+  <Step title="Initialize Project">
+    ```bash
+    cd web-dashboard
+    firebase init hosting
+    ```
+    Select your existing Firebase project or create a new one.
+  </Step>
+</Steps>
+
+## Firebase Configuration
+
+The S-Parking project uses the following `firebase.json` configuration:
+
+```json firebase.json
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "gcp-functions/**",
+      "**/*.ps1",
+      "**/*.md",
+      ".vscode/**"
+    ],
+    "headers": [
+      {
+        "source": "**/*.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "css/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=86400"
+          }
+        ]
+      },
+      {
+        "source": "js/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=86400"
+          }
+        ]
+      },
+      {
+        "source": "assets/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=604800"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Configuration Breakdown
+
+#### Public Directory
+
+```json
+"public": "."
+```
+
+Serves files from the current directory (`web-dashboard/`). All HTML, CSS, JS, and assets are in the root.
+
+#### Ignored Files
+
+```json
+"ignore": [
+  "firebase.json",
+  "**/.*",
+  "**/node_modules/**",
+  "gcp-functions/**",
+  "**/*.ps1",
+  "**/*.md",
+  ".vscode/**"
+]
+```
+
+Excludes backend functions, config files, and development artifacts from deployment.
+
+#### Cache Headers Strategy
+
+S-Parking implements a **multi-tier caching strategy** for optimal performance:
+
+<CodeGroup>
+```json HTML Files (No Cache)
+{
+  "source": "**/*.html",
+  "headers": [{
+    "key": "Cache-Control",
+    "value": "no-cache"
+  }]
+}
+```
+
+```json CSS/JS (1 Day Cache)
+{
+  "source": "js/**",
+  "headers": [{
+    "key": "Cache-Control",
+    "value": "public, max-age=86400"
+  }]
+}
+```
+
+```json Assets (1 Week Cache)
+{
+  "source": "assets/**",
+  "headers": [{
+    "key": "Cache-Control",
+    "value": "public, max-age=604800"
+  }]
+}
+```
+</CodeGroup>
+
+| Resource Type | Cache Duration | Rationale |
+|--------------|----------------|----------|
+| **HTML** | No cache | Ensures users always get the latest version |
+| **CSS/JS** | 24 hours (86400s) | Balance between performance and update frequency |
+| **Assets** | 7 days (604800s) | Static images/icons rarely change |
+
+<Note>
+The `no-cache` directive for HTML files forces browsers to revalidate with the server on each request. This ensures users receive updated JavaScript/CSS references immediately after deployment.
+</Note>
+
+## Deployment Process
+
+### Standard Deployment
+
+<Steps>
+  <Step title="Build and Deploy">
+    ```bash
+    cd web-dashboard
+    firebase deploy --only hosting
+    ```
+    This uploads all files to Firebase Hosting and applies cache headers.
+  </Step>
+
+  <Step title="Verify Deployment">
+    Firebase CLI outputs the hosting URL:
+    ```
+    ✔  Deploy complete!
+    
+    Hosting URL: https://your-project.web.app
+    ```
+  </Step>
+
+  <Step title="Test Live Site">
+    Open the URL in a browser and verify:
+    - Dashboard loads correctly
+    - Google Maps renders
+    - Real-time parking data appears
+  </Step>
+</Steps>
+
+### Preview Deployment (Testing)
+
+Test changes before going live:
+
+```bash
+firebase hosting:channel:deploy preview
+```
+
+This creates a temporary URL like `https://your-project--preview-abc123.web.app` valid for 7 days.
+
+<Warning>
+Preview channels are publicly accessible. Do not deploy sensitive data or credentials.
+</Warning>
+
+## Custom Domain Setup
+
+<Steps>
+  <Step title="Add Custom Domain">
+    ```bash
+    firebase hosting:sites:create your-custom-domain
+    ```
+    Or use Firebase Console → Hosting → Add custom domain.
+  </Step>
+
+  <Step title="Verify Domain Ownership">
+    Add TXT record to your DNS provider:
+    ```
+    TXT @ firebase=your-project-id
+    ```
+  </Step>
+
+  <Step title="Configure DNS Records">
+    Add A records pointing to Firebase:
+    ```
+    A @ 151.101.1.195
+    A @ 151.101.65.195
+    ```
+  </Step>
+
+  <Step title="Wait for SSL Provisioning">
+    Firebase automatically provisions a free SSL certificate. This may take 24-48 hours.
+  </Step>
+</Steps>
+
+## Update Configuration Before Deploy
+
+Before deploying, update API endpoints in `js/config/config.js`:
+
+```javascript js/config/config.js
+export const CONFIG = {
+    DEBUG: false, // Disable debug logs in production
+    
+    GOOGLE_MAPS_API_KEY: "YOUR_PRODUCTION_API_KEY",
+    GOOGLE_MAPS_ID: "YOUR_MAP_ID",
+    
+    // Update with deployed Cloud Run URLs
+    GET_STATUS_API_URL: "https://get-parking-status-[hash].run.app",
+    RESERVATION_API_URL: "https://reserve-parking-spot-[hash].run.app",
+    RELEASE_API_URL: "https://release-parking-spot-[hash].run.app",
+    CREATE_SPOT_URL: "https://create-parking-spot-[hash].run.app",
+    DELETE_SPOT_URL: "https://delete-parking-spot-[hash].run.app",
+    GET_ZONES_URL: "https://get-zones-[hash].run.app",
+    MANAGE_ZONES_URL: "https://manage-zones-[hash].run.app",
+    GET_HISTORY_URL: "https://get-occupancy-history-[hash].run.app",
+    
+    FIREBASE: {
+        apiKey: "YOUR_FIREBASE_KEY",
+        authDomain: "your-project.firebaseapp.com",
+        projectId: "your-project-id",
+        storageBucket: "your-project.appspot.com",
+        messagingSenderId: "123456789",
+        appId: "1:12345:web:abcdef"
+    }
+};
+```
+
+<Warning>
+**NEVER commit API keys to version control!** Copy `config.example.js` to `config.js` and add `config.js` to `.gitignore`.
+</Warning>
+
+## Rollback to Previous Version
+
+Firebase retains deployment history:
+
+```bash
+# List all releases
+firebase hosting:releases:list
+
+# Rollback to specific version
+firebase hosting:rollback
+```
+
+Select the target release from the interactive menu.
+
+## Performance Optimization
+
+### Enable Compression
+
+Firebase Hosting automatically compresses assets with **gzip** and **Brotli**. No configuration needed.
+
+### Verify Compression
+
+```bash
+curl -H "Accept-Encoding: gzip" -I https://your-project.web.app/js/map/core.js
+```
+
+Response should include:
+```
+Content-Encoding: gzip
+```
+
+### Preconnect to External Services
+
+Add to `index.html` `<head>`:
+
+```html
+<!-- Preconnect to Google Maps API -->
+<link rel="preconnect" href="https://maps.googleapis.com">
+<link rel="preconnect" href="https://maps.gstatic.com" crossorigin>
+
+<!-- Preconnect to Cloud Run endpoints -->
+<link rel="preconnect" href="https://[region]-[project].run.app">
+```
+
+## Monitoring and Analytics
+
+### View Hosting Metrics
+
+```bash
+firebase hosting:channel:list
+```
+
+Or use Firebase Console → Hosting → Usage to see:
+- Bandwidth usage
+- Request count
+- Geographic distribution
+
+### Integrate Google Analytics
+
+Add to `index.html`:
+
+```html
+<!-- Google Analytics 4 -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX');
+</script>
+```
+
+## Troubleshooting
+
+### Issue: "Error: HTTP Error: 403, Permission Denied"
+
+**Solution:** Re-authenticate Firebase CLI:
+```bash
+firebase logout
+firebase login --reauth
+```
+
+### Issue: Stale cached content after deployment
+
+**Solution:** HTML files use `no-cache`, but hard refresh to clear browser cache:
+- **Chrome/Edge**: Ctrl+Shift+R (Windows) or Cmd+Shift+R (Mac)
+- **Firefox**: Ctrl+F5 (Windows) or Cmd+Shift+R (Mac)
+
+### Issue: 404 errors on direct URL access
+
+**Solution:** Add rewrites to `firebase.json` for SPA routing:
+```json
+"rewrites": [
+  {
+    "source": "**",
+    "destination": "/index.html"
+  }
+]
+```
+
+### Issue: CORS errors when calling Cloud Run
+
+**Solution:** Ensure Cloud Run functions include CORS headers. S-Parking functions use the `cors` package:
+
+```javascript
+const cors = require('cors')({origin: true});
+
+exports.yourFunction = (req, res) => {
+  cors(req, res, () => {
+    // Your function logic
+  });
+};
+```
+
+## CI/CD Integration
+
+Automate deployments with GitHub Actions:
+
+```yaml .github/workflows/deploy.yml
+name: Deploy to Firebase Hosting
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          channelId: live
+          projectId: your-project-id
+```
+
+<Note>
+Generate a service account key in Firebase Console → Project Settings → Service Accounts, then add it as a GitHub secret.
+</Note>
+
+## Next Steps
+
+<Card title="Configure Cloud Run" icon="server" href="./cloud-run">
+  Deploy backend services to Google Cloud Run
+</Card>
+
+<Card title="Environment Variables" icon="key" href="./environment-config">
+  Manage API keys and configuration
+</Card>
+
+<Card title="Flash ESP32 Firmware" icon="microchip" href="./firmware-flashing">
+  Deploy IoT sensors with production endpoints
+</Card>

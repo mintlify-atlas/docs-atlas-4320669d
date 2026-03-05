@@ -1,0 +1,452 @@
+---
+title: Flash ESP32 Firmware
+description: Program ESP32 devices with S-Parking firmware using Arduino IDE or PlatformIO
+---
+
+The S-Parking IoT layer consists of **ESP32 microcontrollers** equipped with VL53L0X Time-of-Flight (ToF) laser sensors. This guide covers firmware installation, configuration, and troubleshooting.
+
+## Hardware Requirements
+
+- **ESP32 Development Board** (ESP32-WROOM-32 recommended)
+- **VL53L0X ToF Laser Sensor** (I2C interface)
+- **RGB LED** (Common Anode) for visual feedback
+- **Resistors**: 3x 220Ω (for LED current limiting)
+- **Jumper Wires** and breadboard
+- **Micro USB Cable** for programming
+
+### Wiring Diagram
+
+| Component | ESP32 Pin | Notes |
+|-----------|-----------|-------|
+| VL53L0X SDA | GPIO 21 | I2C Data |
+| VL53L0X SCL | GPIO 22 | I2C Clock |
+| VL53L0X VIN | 3.3V | Power |
+| VL53L0X GND | GND | Ground |
+| LED Red | GPIO 13 | Via 220Ω resistor |
+| LED Green | GPIO 12 | Via 220Ω resistor |
+| LED Blue | GPIO 14 | Via 220Ω resistor |
+| LED Common | 3.3V | Common Anode |
+
+<Warning>
+The S-Parking firmware assumes a **Common Anode RGB LED** (long pin to 3.3V). For Common Cathode LEDs, invert the logic in `setColor()` function (lines 196-202 in `S-Parking.ino`).
+</Warning>
+
+## Setup Development Environment
+
+### Option 1: Arduino IDE (Recommended for Beginners)
+
+<Steps>
+  <Step title="Install Arduino IDE">
+    Download from [arduino.cc](https://www.arduino.cc/en/software)
+    - Version 2.0+ recommended
+  </Step>
+
+  <Step title="Add ESP32 Board Support">
+    1. Open **File → Preferences**
+    2. Add to **Additional Board Manager URLs**:
+    ```
+    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    ```
+    3. Go to **Tools → Board → Board Manager**
+    4. Search for "esp32" and install **esp32 by Espressif Systems**
+  </Step>
+
+  <Step title="Install Required Libraries">
+    Go to **Sketch → Include Library → Manage Libraries** and install:
+    - **Adafruit VL53L0X** (by Adafruit)
+    - **ArduinoJson** (by Benoit Blanchon) - Version 6.x
+    
+    Dependencies auto-install:
+    - Adafruit BusIO
+    - Adafruit Unified Sensor
+  </Step>
+
+  <Step title="Select Board">
+    **Tools → Board → ESP32 Arduino → ESP32 Dev Module**
+    
+    Configure board settings:
+    - **Upload Speed**: 921600
+    - **CPU Frequency**: 240MHz
+    - **Flash Frequency**: 80MHz
+    - **Flash Mode**: QIO
+    - **Flash Size**: 4MB (32Mb)
+    - **Partition Scheme**: Default 4MB with spiffs
+  </Step>
+</Steps>
+
+### Option 2: PlatformIO (Advanced Users)
+
+<Steps>
+  <Step title="Install PlatformIO">
+    - **VS Code Extension**: Search for "PlatformIO IDE" in Extensions
+    - **Standalone**: [platformio.org](https://platformio.org/install)
+  </Step>
+
+  <Step title="Create Project">
+    ```bash
+    platformio init --board esp32dev
+    ```
+  </Step>
+
+  <Step title="Configure platformio.ini">
+    ```ini
+    [env:esp32dev]
+    platform = espressif32
+    board = esp32dev
+    framework = arduino
+    monitor_speed = 115200
+    lib_deps = 
+        adafruit/Adafruit VL53L0X@^1.2.0
+        bblanchon/ArduinoJson@^6.21.0
+    ```
+  </Step>
+
+  <Step title="Build and Upload">
+    ```bash
+    platformio run --target upload
+    platformio device monitor
+    ```
+  </Step>
+</Steps>
+
+## Configure Firmware
+
+### 1. Create Secrets File
+
+Copy the example secrets template:
+
+```bash
+cd firmware/S-Parking
+cp arduino_secrets.example.h arduino_secrets.h
+```
+
+### 2. Edit Configuration
+
+Open `arduino_secrets.h` and configure:
+
+```cpp arduino_secrets.h
+#pragma once
+
+// --- CREDENCIALES WIFI ---
+#define SECRET_SSID "YourWiFiNetwork"
+#define SECRET_PASS "YourWiFiPassword"
+
+// --- TUS URLs DE GOOGLE CLOUD ---
+
+// 1. URL para ENVIAR datos (ingest-parking-data)
+#define SECRET_GCP_URL_INGEST "https://ingest-parking-data-[hash].run.app"
+
+// 2. URL para LEER estado (get-parking-status)
+// NOTA: Esta funcion devuelve TODOS los puestos. El ESP32 buscará su ID en la lista.
+#define SECRET_GCP_URL_GET "https://get-parking-status-[hash].run.app"
+
+// 3. Identificación del Puesto
+#define SECRET_SPOT_ID "A-01"
+```
+
+### Configuration Parameters
+
+| Parameter | Description | Example |
+|-----------|-------------|----------|
+| `SECRET_SSID` | WiFi network name | `"ParkingLot_WiFi"` |
+| `SECRET_PASS` | WiFi password | `"SecurePass123"` |
+| `SECRET_GCP_URL_INGEST` | Cloud Run ingest endpoint | `https://ingest-[hash].run.app` |
+| `SECRET_GCP_URL_GET` | Cloud Run status endpoint | `https://get-status-[hash].run.app` |
+| `SECRET_SPOT_ID` | Unique spot identifier | `"A-01"`, `"B-12"`, etc. |
+
+<Note>
+**Spot ID Naming Convention**: Use format `[ZONE]-[NUMBER]` (e.g., `A-01`, `B-12`, `VIPA-03`). This must match the spot IDs created in the dashboard.
+</Note>
+
+### 3. Calibrate Sensor Threshold
+
+The default detection threshold is **400mm** (line 78 in `S-Parking.ino`):
+
+```cpp
+if (measure.RangeStatus != 4 && measure.RangeMilliMeter < 400) {
+    nuevoEstadoSensor = 0; // Ocupado fisicamente
+} else {
+    nuevoEstadoSensor = 1; // Disponible fisicamente
+}
+```
+
+Adjust based on installation height:
+- **Ceiling-mounted (2.5m)**: 400-500mm
+- **Pole-mounted (1.5m)**: 300-400mm
+- **Ground-level test**: 200-300mm
+
+<Warning>
+Test sensor readings before deployment:
+```cpp
+Serial.print("Distance: ");
+Serial.print(measure.RangeMilliMeter);
+Serial.println(" mm");
+```
+Measure distance with and without a vehicle present, then set threshold midway between values.
+</Warning>
+
+## Upload Firmware
+
+<Steps>
+  <Step title="Connect ESP32">
+    - Plug ESP32 into computer via USB
+    - Install drivers if needed: [silabs.com/developers/usb-to-uart-bridge-vcp-drivers](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
+  </Step>
+
+  <Step title="Select Port">
+    **Arduino IDE**: Tools → Port → Select COM port (Windows) or /dev/ttyUSB0 (Linux)
+    
+    **PlatformIO**: Auto-detects port
+  </Step>
+
+  <Step title="Open Firmware">
+    **Arduino IDE**: File → Open → Select `firmware/S-Parking/S-Parking.ino`
+  </Step>
+
+  <Step title="Compile and Upload">
+    Click **Upload** button or press **Ctrl+U**
+    
+    Expected output:
+    ```
+    Connecting........_____.....
+    Writing at 0x00001000... (100%)
+    Leaving...
+    Hard resetting via RTS pin...
+    ```
+  </Step>
+
+  <Step title="Open Serial Monitor">
+    **Tools → Serial Monitor** (set baud rate to **115200**)
+    
+    Verify output:
+    ```
+    Conectando a WiFi: YourWiFiNetwork
+    ........
+    ¡WiFi Conectado!
+    IP asignada: 192.168.1.42
+    ```
+  </Step>
+</Steps>
+
+## Firmware Behavior
+
+The S-Parking firmware implements intelligent self-healing logic:
+
+### Polling Intervals
+
+```cpp
+const long sensorInterval = 500;    // Read sensor every 0.5s
+const long cloudPollInterval = 15000; // Check cloud every 15s
+```
+
+- **Sensor reading**: 500ms (fast response to vehicle arrival/departure)
+- **Cloud sync**: 15s (periodic validation of reservation status)
+
+### LED Status Indicators
+
+| LED Color | Status | Description |
+|-----------|--------|-------------|
+| 🟢 **Green** | Available | No vehicle, no reservation |
+| 🟡 **Amber** (Red+Green) | Reserved | No vehicle, but reserved in system |
+| 🔴 **Red** | Occupied | Vehicle detected (priority over reservation) |
+
+### Self-Healing Logic
+
+The firmware auto-corrects desynchronization (lines 120-136):
+
+**Scenario A**: Sensor shows **Available** (Green), Cloud shows **Occupied**
+- **Cause**: Network packet loss when vehicle departed
+- **Action**: Force-send "Available" status to cloud
+
+**Scenario B**: Sensor shows **Occupied** (Red), Cloud shows **Available/Reserved**
+- **Cause**: Network packet loss when vehicle arrived
+- **Action**: Force-send "Occupied" status to cloud
+
+<Note>
+The physical sensor reading **always takes priority** over cloud state. This ensures visual LED feedback is accurate for drivers on-site.
+</Note>
+
+## Test Firmware
+
+### 1. Verify WiFi Connection
+
+Serial Monitor output should show:
+```
+Conectando a WiFi: YourNetwork
+¡WiFi Conectado!
+IP asignada: 192.168.1.42
+```
+
+### 2. Test Sensor Detection
+
+Place an object (or hand) under the sensor:
+```
+Cambio físico detectado: 0
+Enviado a ingest. Codigo: 200
+```
+
+Remove object:
+```
+Cambio físico detectado: 1
+Enviado a ingest. Codigo: 200
+```
+
+### 3. Verify Cloud Sync
+
+Every 15 seconds:
+```
+Sincronizando. Local: 1 | Nube: 1
+```
+
+If desynchronization occurs:
+```
+¡Desincronización detectada! Forzando actualización a DISPONIBLE...
+Enviado a ingest. Codigo: 200
+```
+
+### 4. Check Dashboard
+
+Open S-Parking web dashboard and verify:
+- Spot appears with correct ID
+- Status updates in real-time (under 2s latency)
+- LED color matches dashboard indicator
+
+## Troubleshooting
+
+### Issue: "Error al iniciar VL53L0X"
+
+**Cause**: Sensor not detected on I2C bus
+
+**Solution**:
+1. Verify wiring (SDA → GPIO 21, SCL → GPIO 22)
+2. Check sensor power (3.3V, not 5V!)
+3. Test I2C scanner:
+   ```cpp
+   Wire.begin();
+   Wire.beginTransmission(0x29);
+   byte error = Wire.endTransmission();
+   Serial.println(error == 0 ? "Sensor found" : "Sensor not found");
+   ```
+
+### Issue: "Fallo al conectar WiFi. Reiniciando..."
+
+**Cause**: Incorrect SSID/password or weak signal
+
+**Solution**:
+- Verify credentials in `arduino_secrets.h`
+- Move ESP32 closer to router during testing
+- Check WiFi is 2.4GHz (ESP32 doesn't support 5GHz)
+
+### Issue: HTTP Response Code 404/500
+
+**Cause**: Incorrect Cloud Run URL or service not deployed
+
+**Solution**:
+```bash
+# Verify Cloud Run services are running
+gcloud run services list
+
+# Test endpoint manually
+curl -X POST https://your-ingest-url.run.app \
+  -H "Content-Type: application/json" \
+  -d '{"spot_id":"A-01","status":1}'
+```
+
+### Issue: LED not lighting up
+
+**Cause**: Incorrect LED type (Common Cathode vs. Common Anode)
+
+**Solution**: Invert logic in `setColor()` function:
+```cpp
+// For Common Cathode LED:
+digitalWrite(LED_RED_PIN, red ? HIGH : LOW);
+digitalWrite(LED_GREEN_PIN, green ? HIGH : LOW);
+digitalWrite(LED_BLUE_PIN, blue ? HIGH : LOW);
+```
+
+### Issue: Sensor reads 8190mm constantly
+
+**Cause**: VL53L0X out of range or measurement error
+
+**Solution**: 
+- Check `measure.RangeStatus` (should be 0 for valid reading)
+- Ensure target is within 0-1200mm range
+- Adjust sensor angle (perpendicular to ground)
+
+### Issue: High latency (>5s) in status updates
+
+**Cause**: Network congestion or Cloud Run cold start
+
+**Solution**:
+- Reduce `cloudPollInterval` to 10000ms for critical spots
+- Set Cloud Run minimum instances to 1:
+  ```bash
+  gcloud run services update ingest-parking-data --min-instances 1
+  ```
+
+## Production Deployment Tips
+
+<Steps>
+  <Step title="Unique Spot IDs">
+    Use a consistent naming scheme:
+    - `A-01` to `A-20` (Zone A)
+    - `B-01` to `B-15` (Zone B)
+    - `VIP-01` to `VIP-05` (VIP section)
+  </Step>
+
+  <Step title="Label Devices">
+    Use physical labels on ESP32 boards with spot IDs for easy maintenance.
+  </Step>
+
+  <Step title="Power Supply">
+    Use 5V/2A USB power adapters or PoE (with voltage regulator to 5V for ESP32).
+  </Step>
+
+  <Step title="Weatherproofing">
+    For outdoor installations:
+    - IP65-rated enclosures
+    - Silicone seal around sensor
+    - Waterproof USB connectors
+  </Step>
+
+  <Step title="Batch Programming">
+    For multiple devices, create a script:
+    ```bash
+    #!/bin/bash
+    for spot in A-01 A-02 A-03; do
+      sed -i "s/SECRET_SPOT_ID \".*\"/SECRET_SPOT_ID \"$spot\"/" arduino_secrets.h
+      platformio run --target upload
+      echo "Flashed $spot"
+      sleep 5
+    done
+    ```
+  </Step>
+</Steps>
+
+## Firmware Update Over-The-Air (Future)
+
+S-Parking roadmap includes OTA updates via ESP32's built-in OTA capabilities:
+
+```cpp
+#include <ArduinoOTA.h>
+
+ArduinoOTA.setHostname("S-Parking-A01");
+ArduinoOTA.setPassword("secure_ota_pass");
+ArduinoOTA.begin();
+```
+
+This allows wireless firmware updates without physical access.
+
+## Next Steps
+
+<Card title="Environment Configuration" icon="gear" href="./environment-config">
+  Manage secrets and API endpoints across all system components
+</Card>
+
+<Card title="Deploy Cloud Run" icon="server" href="./cloud-run">
+  Set up backend services for IoT data ingestion
+</Card>
+
+<Card title="Firebase Hosting" icon="globe" href="./firebase-hosting">
+  Deploy the web dashboard to production
+</Card>

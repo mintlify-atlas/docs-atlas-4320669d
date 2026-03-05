@@ -1,0 +1,474 @@
+---
+title: "Zone Management"
+description: "Create parking zones, use builder mode for batch spot creation, and calculate distances with Haversine formula"
+icon: "map-location-dot"
+---
+
+## Overview
+
+S-Parking's **zone management system** allows administrators to organize parking spots into logical groups (e.g., "Main Lot", "Faculty Parking", "Visitor Area"). Zones enable filtered analytics, visual clustering on maps, and efficient bulk operations.
+
+## Creating Zones
+
+Zones are created via the admin dashboard:
+
+```javascript
+// js/main.js:500-538
+const btnCreateZone = document.getElementById('btn-create-zone');
+btnCreateZone.addEventListener('click', async () => {
+    const input = document.getElementById('new-zone-name');
+    const name = input.value.trim();
+    
+    if (!name) {
+        UI_Toasts.showToast('Please enter zone name', 'info');
+        return;
+    }
+
+    btnCreateZone.disabled = true;
+    btnCreateZone.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating...';
+
+    try {
+        logger.debug('Creating zone:', name);
+        const result = await manageZone('create', { name });
+        logger.debug('Creation response:', result);
+        
+        UI_Toasts.showToast('Zone created successfully', 'success');
+        input.value = '';
+        
+        // Refresh zones after brief pause
+        await new Promise(r => setTimeout(r, 500));
+        state.zones = await fetchZones();
+        renderZonesModal();
+        
+    } catch (error) {
+        console.error('Error creating zone:', error);
+        UI_Toasts.showToast('Error creating zone: ' + error.message, 'error');
+    } finally {
+        btnCreateZone.disabled = false;
+        btnCreateZone.innerHTML = origText;
+    }
+});
+```
+
+## Zone Data Structure
+
+```json
+{
+  "id": "zone_1764307623391",
+  "name": "Federico Froebel Street",
+  "order": 1,
+  "desc": "Main parking area along Froebel St.",
+  "color": "blue",
+  "created_at": "2026-01-15T10:30:00Z"
+}
+```
+
+<CardGroup cols={3}>
+  <Card title="id" icon="fingerprint">
+    Auto-generated unique identifier (timestamp-based)
+  </Card>
+  <Card title="name" icon="tag">
+    Human-readable zone name
+  </Card>
+  <Card title="order" icon="arrow-down-1-9">
+    Display order in lists (lower = first)
+  </Card>
+</CardGroup>
+
+## Zone API Functions
+
+The zones API supports create, update, and delete operations:
+
+```javascript
+// js/api/zones.js:74-103
+export async function manageZone(action, zoneData) {
+    // action: 'create' | 'delete' | 'update'
+    // zoneData: { id?, name, order?, desc?, color? }
+    
+    try {
+        // Invalidate cache to reflect changes
+        invalidateZonesCache();
+        logger.debug(`🌐 Calling manageZone API: action=${action}`, zoneData);
+        
+        const response = await fetch(CONFIG.MANAGE_ZONES_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...zoneData })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const result = await response.json();
+        logger.debug(`✅ manageZone (${action}) successful:`, result);
+        
+        // Success: refresh localStorage
+        const zones = await fetchZones();
+        localStorage.setItem(STORAGE_KEY_ZONES, JSON.stringify(zones));
+        
+        return result;
+    } catch (error) {
+        console.error(`❌ Error in manageZone (${action}):`, error);
+        // ... fallback to localStorage ...
+    }
+}
+```
+
+<Note>
+**Offline Support**: Zone changes are saved to localStorage if the API is unavailable, then synced when connection is restored.
+</Note>
+
+## Builder Mode
+
+Builder mode enables **batch creation of parking spots** along a line. This is essential for efficiently setting up large parking lots.
+
+### Activation
+
+Admins toggle builder mode via the toolbar:
+
+```javascript
+// js/map/builder.js:11-14
+export function toggleLineBuilder(enable) {
+    isBuilding = enable;
+    if (!enable) resetBuilder();
+}
+```
+
+### Two-Click Workflow
+
+<Steps>
+  <Step title="Click Start Point">
+    Admin clicks on the map to set the starting position. A blue marker appears.
+    
+    ```javascript
+    // js/map/builder.js:22-37
+    if (!startPoint) {
+        startPoint = latLng;
+        
+        // Visual start marker
+        const pinDiv = document.createElement('div');
+        pinDiv.className = 'w-4 h-4 bg-blue-500 rounded-full border-2 border-white';
+        
+        const startMarker = new mapState.AdvancedMarkerElement({
+            map: mapState.map,
+            position: startPoint,
+            content: pinDiv
+        });
+        ghostMarkers.push(startMarker);
+        
+        showToast("Select the end point of the line", "info");
+    }
+    ```
+  </Step>
+  
+  <Step title="Click End Point">
+    Admin clicks the ending position. The system returns both coordinates to open the configuration panel.
+    
+    ```javascript
+    // js/map/builder.js:39-43
+    else {
+        // Click 2: End Point (opens config panel in UI)
+        return { start: startPoint, end: latLng };
+    }
+    ```
+  </Step>
+  
+  <Step title="Configure Spots">
+    A modal appears asking for:
+    - **Count**: Number of spots to create (e.g., 20)
+    - **Prefix**: Letter prefix (e.g., "A")
+    - **Start Number**: Starting number (e.g., 1)
+    
+    Result: Creates spots `A-01`, `A-02`, ..., `A-20`
+  </Step>
+  
+  <Step title="Preview">
+    Before confirming, ghost markers show where spots will be placed:
+    
+    ```javascript
+    // js/map/builder.js:49-88
+    export function previewLine(start, end, count) {
+        clearGhosts();
+        
+        const path = [start, end];
+        
+        // Draw line
+        previewPolyline = new google.maps.Polyline({
+            map: mapState.map,
+            path: path,
+            strokeColor: '#3b82f6',
+            strokeOpacity: 0.5,
+            strokeWeight: 2
+        });
+        
+        // Calculate interpolation
+        const spherical = google.maps.geometry.spherical;
+        const distance = spherical.computeDistanceBetween(start, end);
+        const heading = spherical.computeHeading(start, end);
+        const step = distance / (count - 1 || 1);
+        
+        for (let i = 0; i < count; i++) {
+            const pos = spherical.computeOffset(start, i * step, heading);
+            
+            // Ghost pin
+            const div = document.createElement('div');
+            div.className = 'w-3 h-3 bg-blue-300 rounded-full opacity-50';
+            
+            const marker = new mapState.AdvancedMarkerElement({
+                map: mapState.map,
+                position: pos,
+                content: div
+            });
+            ghostMarkers.push(marker);
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Execute">
+    Clicking "Create" executes batch creation:
+    
+    ```javascript
+    // js/map/builder.js:93-119
+    export async function executeBatchCreate(start, end, config) {
+        const spherical = google.maps.geometry.spherical;
+        const distance = spherical.computeDistanceBetween(start, end);
+        const heading = spherical.computeHeading(start, end);
+        const step = distance / (config.count - 1 || 1);
+        
+        let createdCount = 0;
+        
+        for (let i = 0; i < config.count; i++) {
+            const pos = spherical.computeOffset(start, i * step, heading);
+            
+            // Format ID: A-01, A-02...
+            const num = parseInt(config.startNum) + i;
+            const id = `${config.prefix}${num.toString().padStart(2, '0')}`;
+            
+            await createSpot({
+                id: id,
+                lat: pos.lat(),
+                lng: pos.lng(),
+                desc: `Spot ${id}`
+            });
+            createdCount++;
+        }
+        
+        resetBuilder();
+        return createdCount;
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+**Geometry Library**: Builder mode uses Google Maps' Spherical Geometry library for accurate distance and bearing calculations on the Earth's surface.
+</Note>
+
+## Haversine Distance Calculation
+
+While Google Maps provides spherical utilities, S-Parking can also calculate distances using the **Haversine formula** for scenarios without the Maps API:
+
+```javascript
+// Example Haversine implementation (not in source, but commonly used)
+function haversineDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    
+    return R * c; // Distance in meters
+}
+```
+
+<Accordion title="When to Use Haversine vs Google Maps Spherical">
+**Use Google Maps Spherical when:**
+- You already load Google Maps API
+- You need precise WGS84 ellipsoid calculations
+- You're working with map visualizations
+
+**Use Haversine when:**
+- You don't have Google Maps loaded
+- You need standalone distance calculations
+- Accuracy within ~0.5% is acceptable (it assumes Earth is a perfect sphere)
+</Accordion>
+
+## Bulk Operations
+
+Zones enable efficient bulk operations:
+
+### Bulk Assign Spots to Zone
+
+```javascript
+// js/api/parking.js:287-299
+export async function bulkAssignSpots(zoneId, spotIds) {
+    const results = [];
+    for (const id of spotIds) {
+        try {
+            const res = await updateSpot(id, { zone_id: zoneId || '' });
+            results.push({ id, success: true, res });
+        } catch (err) {
+            console.error('Error assigning spot', id, err);
+            results.push({ id, success: false, error: err });
+        }
+    }
+    return results;
+}
+```
+
+### Bulk Delete Spots
+
+```javascript
+// js/api/parking.js:305-317
+export async function bulkDeleteSpots(spotIds) {
+    const results = [];
+    for (const id of spotIds) {
+        try {
+            const res = await deleteSpot(id);
+            results.push({ id, success: !!res });
+        } catch (err) {
+            console.error('Error deleting spot', id, err);
+            results.push({ id, success: false, error: err });
+        }
+    }
+    return results;
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Batch Assignment" icon="layer-group">
+    Select multiple spots and assign them to a zone in one operation
+  </Card>
+  <Card title="Batch Deletion" icon="trash-can">
+    Remove all spots in a zone with a single action
+  </Card>
+</CardGroup>
+
+## Zone-Based Analytics
+
+Zones enable per-zone occupancy tracking:
+
+```javascript
+// gcp-functions/save-hourly-snapshot/index.js:174-186
+Object.keys(zonesMap).forEach(zoneId => {
+    const z = zonesMap[zoneId];
+    const occPlusRes = (z.occupied || 0) + (z.reserved || 0);
+    const pct = z.total ? Math.round((occPlusRes / z.total) * 100) : 0;
+    
+    docData.zones[zoneId] = {
+        free: z.free || 0,
+        occupied: z.occupied || 0,
+        reserved: z.reserved || 0,
+        total: z.total || 0,
+        occupancyPct: pct
+    };
+});
+```
+
+Hourly snapshots include per-zone breakdowns:
+
+```json
+{
+  "global": { "free": 12, "occupied": 20, "reserved": 4, "total": 36 },
+  "zones": {
+    "zone_1764307623391": {
+      "free": 5,
+      "occupied": 12,
+      "reserved": 3,
+      "total": 20,
+      "occupancyPct": 75
+    },
+    "zone_1764306251630": {
+      "free": 7,
+      "occupied": 8,
+      "reserved": 1,
+      "total": 16,
+      "occupancyPct": 56
+    }
+  }
+}
+```
+
+## Visual Clustering
+
+Zones affect how spots are displayed on the map:
+
+- **High zoom (20+)**: Individual spot markers
+- **Medium zoom (17-19)**: Spots grouped by color (zone-based)
+- **Low zoom (below 17)**: Zone-level cluster markers
+
+```javascript
+// js/map/markers.js (conceptual)
+function updateClusterView(spots, zones, clickHandler) {
+    const zoom = mapState.map.getZoom();
+    
+    if (zoom >= 20) {
+        // Show individual spots
+        spots.forEach(spot => renderSpotMarker(spot, clickHandler));
+    } else if (zoom >= 17) {
+        // Group by zone
+        zones.forEach(zone => {
+            const zoneSpots = spots.filter(s => s.zone_id === zone.id);
+            renderZoneCluster(zone, zoneSpots);
+        });
+    } else {
+        // Super high-level: one marker per zone
+        zones.forEach(zone => renderZoneSummary(zone));
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Zone Naming Conventions">
+    Use clear, hierarchical names:
+    
+    - ✅ "Main Lot - North"
+    - ✅ "Building A - Level 2"
+    - ✅ "Faculty Reserved"
+    - ❌ "Zone 1"
+    - ❌ "Temp"
+    
+    Good names help users understand parking locations at a glance.
+  </Accordion>
+  
+  <Accordion title="Optimal Zone Size">
+    Balance granularity with manageability:
+    
+    - **Too small** (< 5 spots): Excessive zones clutter the interface
+    - **Too large** (> 50 spots): Hard to locate specific spots
+    - **Ideal**: 10-30 spots per zone
+    
+    Consider physical boundaries (streets, buildings) when defining zones.
+  </Accordion>
+  
+  <Accordion title="Builder Mode Efficiency">
+    Tips for using builder mode effectively:
+    
+    1. **Zoom in first**: Set map to zoom level 20+ before placing line
+    2. **Straight lines**: Builder works best for linear parking arrangements
+    3. **Angled parking**: For angled spots, create multiple shorter lines
+    4. **Preview before committing**: Always check ghost markers before creating
+    5. **Batch by zone**: Create all spots for one zone, then assign zone in bulk
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Analytics Dashboard" icon="chart-line" href="/features/analytics-dashboard">
+    View per-zone occupancy trends and sparklines
+  </Card>
+  <Card title="Real-Time Monitoring" icon="wifi" href="/features/real-time-monitoring">
+    How zone data is cached and synchronized
+  </Card>
+</CardGroup>

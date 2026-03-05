@@ -1,0 +1,298 @@
+---
+title: Deploy to Cloud Run
+description: Deploy Cloud Functions to Google Cloud Run with containerized Node.js microservices
+---
+
+S-Parking backend services are deployed as containerized Node.js 20 microservices on **Google Cloud Run**, Google's fully managed serverless compute platform. This guide covers the deployment process for all backend functions.
+
+## Architecture Overview
+
+The S-Parking backend consists of multiple independent Cloud Run services:
+
+- **ingest-parking-data** - Receives IoT sensor data from ESP32 devices
+- **get-parking-status** - Returns real-time parking spot status
+- **reserve-parking-spot** - Handles spot reservations
+- **release-parking-spot** - Releases reserved spots
+- **create-parking-spot** - Creates new parking spots
+- **delete-parking-spot** - Deletes parking spots
+- **manage-zones** - Zone management operations
+- **get-zones** - Retrieves zone information
+- **get-occupancy-history** - Returns historical occupancy data
+- **save-hourly-snapshot** - Triggered by Cloud Scheduler for analytics
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Google Cloud SDK">
+    Download and install the `gcloud` CLI:
+    ```bash
+    curl https://sdk.cloud.google.com | bash
+    exec -l $SHELL
+    ```
+  </Step>
+
+  <Step title="Authenticate with Google Cloud">
+    ```bash
+    gcloud auth login
+    gcloud config set project YOUR_PROJECT_ID
+    ```
+  </Step>
+
+  <Step title="Enable Required APIs">
+    ```bash
+    gcloud services enable cloudbuild.googleapis.com
+    gcloud services enable run.googleapis.com
+    gcloud services enable firestore.googleapis.com
+    ```
+  </Step>
+</Steps>
+
+## Build Container Images
+
+Cloud Run requires containerized applications. Use Google Cloud Build to create Docker images:
+
+### Single Function Build
+
+```bash
+# Navigate to function directory
+cd web-dashboard/gcp-functions/services_ingest-parking-data_*
+
+# Build and push image to Google Container Registry
+gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/ingest-parking-data
+```
+
+### Batch Build All Functions
+
+```bash
+# Build all Cloud Functions
+for dir in web-dashboard/gcp-functions/*/; do
+  FUNCTION_NAME=$(basename "$dir" | sed 's/_function-source$//' | sed 's/services_//' | sed 's/_[0-9.]*$//')
+  echo "Building $FUNCTION_NAME..."
+  gcloud builds submit "$dir" --tag gcr.io/YOUR_PROJECT_ID/$FUNCTION_NAME
+done
+```
+
+<Note>
+Each function directory must contain a valid `Dockerfile` or `package.json` for Cloud Build to process. S-Parking uses the Node.js 20 buildpack automatically.
+</Note>
+
+## Deploy to Cloud Run
+
+### Deploy Individual Service
+
+<CodeGroup>
+```bash Main Data Ingestion Service
+gcloud run deploy ingest-parking-data \
+  --image gcr.io/YOUR_PROJECT_ID/ingest-parking-data \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 256Mi \
+  --cpu 1 \
+  --max-instances 10 \
+  --set-env-vars FIRESTORE_COLLECTION=parking_spots
+```
+
+```bash Parking Status Service
+gcloud run deploy get-parking-status \
+  --image gcr.io/YOUR_PROJECT_ID/get-parking-status \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 256Mi \
+  --cpu 1 \
+  --max-instances 5
+```
+
+```bash Reservation Service
+gcloud run deploy reserve-parking-spot \
+  --image gcr.io/YOUR_PROJECT_ID/reserve-parking-spot \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 256Mi \
+  --timeout 60s
+```
+</CodeGroup>
+
+### Deployment Parameters Explained
+
+| Parameter | Purpose | S-Parking Value |
+|-----------|---------|----------------|
+| `--platform managed` | Use fully managed Cloud Run | Always set |
+| `--allow-unauthenticated` | Allow public access (required for IoT devices) | Set for IoT endpoints |
+| `--memory` | Container memory allocation | 256Mi (sufficient for lightweight functions) |
+| `--cpu` | CPU allocation | 1 (auto-scales under load) |
+| `--max-instances` | Maximum concurrent instances | 5-10 based on expected traffic |
+| `--timeout` | Request timeout | 60s default, 300s for long operations |
+
+<Warning>
+The `ingest-parking-data` endpoint **must** be publicly accessible (`--allow-unauthenticated`) for ESP32 devices to send sensor data. Implement API key validation in the function code if security is a concern.
+</Warning>
+
+## Environment Variables
+
+Set environment variables during deployment:
+
+```bash
+gcloud run deploy YOUR_SERVICE_NAME \
+  --image gcr.io/YOUR_PROJECT_ID/YOUR_SERVICE_NAME \
+  --set-env-vars \
+    FIRESTORE_COLLECTION=parking_spots,\
+    NODE_ENV=production,\
+    LOG_LEVEL=info
+```
+
+### Common Environment Variables
+
+- `FIRESTORE_COLLECTION` - Firestore collection name (default: `parking_spots`)
+- `NODE_ENV` - Runtime environment (`production` or `development`)
+- `LOG_LEVEL` - Logging verbosity (`info`, `debug`, `error`)
+
+## Verify Deployment
+
+After deployment, test your Cloud Run service:
+
+```bash
+# Get service URL
+gcloud run services describe ingest-parking-data \
+  --platform managed \
+  --region us-central1 \
+  --format 'value(status.url)'
+
+# Test endpoint
+curl https://YOUR_SERVICE_URL.run.app
+```
+
+### Check Logs
+
+```bash
+# View real-time logs
+gcloud run logs tail ingest-parking-data --project YOUR_PROJECT_ID
+
+# View recent logs
+gcloud run logs read ingest-parking-data --limit 50
+```
+
+## Update Existing Service
+
+To deploy a new version:
+
+<Steps>
+  <Step title="Rebuild Image">
+    ```bash
+    gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/ingest-parking-data
+    ```
+  </Step>
+
+  <Step title="Deploy New Revision">
+    ```bash
+    gcloud run deploy ingest-parking-data \
+      --image gcr.io/YOUR_PROJECT_ID/ingest-parking-data \
+      --platform managed \
+      --region us-central1
+    ```
+    Cloud Run automatically handles zero-downtime deployment.
+  </Step>
+
+  <Step title="Verify Revision">
+    ```bash
+    gcloud run revisions list --service ingest-parking-data
+    ```
+  </Step>
+</Steps>
+
+## Configure Cloud Scheduler
+
+For time-based functions like `save-hourly-snapshot`, set up Cloud Scheduler:
+
+```bash
+# Create hourly snapshot job
+gcloud scheduler jobs create http save-hourly-snapshot-job \
+  --schedule "0 * * * *" \
+  --uri "https://save-hourly-snapshot-[HASH].run.app" \
+  --http-method POST \
+  --oidc-service-account-email YOUR_SERVICE_ACCOUNT@YOUR_PROJECT.iam.gserviceaccount.com
+```
+
+<Note>
+The cron expression `"0 * * * *"` triggers the function every hour at minute 0. Adjust based on your analytics requirements.
+</Note>
+
+## Troubleshooting
+
+### Issue: "Service not found"
+
+**Solution:** Verify the service was deployed to the correct region:
+```bash
+gcloud run services list --platform managed
+```
+
+### Issue: "Container failed to start"
+
+**Solution:** Check function dependencies in `package.json`:
+```json
+{
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
+    "@google-cloud/firestore": "^7.0.0"
+  }
+}
+```
+
+Ensure all required packages are listed.
+
+### Issue: "Permission denied" errors
+
+**Solution:** Grant Cloud Run service account Firestore access:
+```bash
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member serviceAccount:YOUR_SERVICE_ACCOUNT@YOUR_PROJECT.iam.gserviceaccount.com \
+  --role roles/datastore.user
+```
+
+### Issue: High cold start latency
+
+**Solution:** Set minimum instances:
+```bash
+gcloud run deploy ingest-parking-data \
+  --min-instances 1 \
+  --image gcr.io/YOUR_PROJECT_ID/ingest-parking-data
+```
+
+<Warning>
+Minimum instances incur continuous costs. Only use for critical, latency-sensitive endpoints like IoT data ingestion.
+</Warning>
+
+## Cost Optimization
+
+S-Parking's Cloud Run deployment is cost-optimized:
+
+- **Memory**: 256Mi (minimum for Node.js functions)
+- **Auto-scaling**: Scales to zero when idle
+- **Request timeout**: 60s (prevents runaway charges)
+- **Max instances**: Capped at 10 to prevent billing spikes
+
+### Monitor Costs
+
+```bash
+# View Cloud Run metrics
+gcloud run services describe ingest-parking-data \
+  --format 'value(status.traffic)'
+```
+
+Use Google Cloud Console → Cloud Run → Metrics to monitor request counts, latency, and instance usage.
+
+## Next Steps
+
+<Card title="Configure Frontend" icon="globe" href="./firebase-hosting">
+  Deploy the web dashboard to Firebase Hosting
+</Card>
+
+<Card title="Flash ESP32 Firmware" icon="microchip" href="./firmware-flashing">
+  Program IoT sensors with Cloud Run endpoint URLs
+</Card>
+
+<Card title="Environment Configuration" icon="gear" href="./environment-config">
+  Set up API URLs and secrets management
+</Card>

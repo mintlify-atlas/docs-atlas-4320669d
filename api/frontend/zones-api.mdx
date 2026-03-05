@@ -1,0 +1,417 @@
+---
+title: 'Zones API'
+description: 'Client-side API functions for managing parking zones'
+icon: 'layer-group'
+---
+
+## Overview
+
+The Zones API provides functions to fetch, create, update, and delete parking zones. It includes intelligent caching (5-minute TTL) and localStorage fallback for offline operation.
+
+## Import
+
+```javascript
+import { 
+  fetchZones, 
+  manageZone, 
+  invalidateZonesCache 
+} from './js/api/zones.js';
+```
+
+## Caching Behavior
+
+The Zones API implements a two-layer caching strategy:
+
+- **Memory Cache**: Stores zones in memory with 5-minute TTL
+- **localStorage Cache**: Persistent fallback storage when API is unavailable
+
+### Cache Keys
+
+<ParamField path="STORAGE_KEY_ZONES" type="string" default="'sparking_zones_local'">
+  localStorage key for cached zones data
+</ParamField>
+
+<ParamField path="STORAGE_KEY_ZONES_SYNC" type="string" default="'sparking_zones_synced_at'">
+  localStorage key for last sync timestamp (ISO 8601 format)
+</ParamField>
+
+### Cache Duration
+
+The cache TTL is configurable via `CONFIG.PERFORMANCE.CACHE_ZONES` (default: 300000ms = 5 minutes).
+
+---
+
+## fetchZones
+
+Retrieves all parking zones with intelligent caching.
+
+### Function Signature
+
+```javascript
+async function fetchZones(): Promise<Array<Zone>>
+```
+
+### Returns
+
+<ResponseField name="zones" type="array">
+  Array of zone objects
+  
+  <ResponseField name="id" type="string">
+    Unique zone identifier (e.g., "zone_vip", "zone_general")
+  </ResponseField>
+  
+  <ResponseField name="name" type="string">
+    Display name of the zone
+  </ResponseField>
+  
+  <ResponseField name="order" type="number">
+    Sort order for display (lower numbers appear first)
+  </ResponseField>
+  
+  <ResponseField name="desc" type="string">
+    Zone description
+  </ResponseField>
+  
+  <ResponseField name="color" type="string">
+    Color identifier for UI rendering (e.g., "blue", "red", "green")
+  </ResponseField>
+  
+  <ResponseField name="created_at" type="string">
+    Creation timestamp (ISO 8601)
+  </ResponseField>
+  
+  <ResponseField name="updated_at" type="string" optional>
+    Last update timestamp (ISO 8601)
+  </ResponseField>
+  
+  <ResponseField name="_local" type="boolean" optional>
+    Flag indicating zone exists only in localStorage (not synced to server)
+  </ResponseField>
+</ResponseField>
+
+### Cache Behavior
+
+1. **Memory cache hit**: Returns cached data if less than 5 minutes old
+2. **API call**: Fetches from `CONFIG.GET_ZONES_URL` and updates both memory and localStorage
+3. **Fallback**: Returns localStorage data if API fails
+4. **Empty array**: Returns `[]` if both API and localStorage are unavailable
+
+### Usage Example
+
+```javascript
+import { fetchZones } from './js/api/zones.js';
+
+try {
+  const zones = await fetchZones();
+  console.log(`Loaded ${zones.length} zones`);
+  
+  // Sort by display order
+  const sortedZones = zones.sort((a, b) => a.order - b.order);
+  
+  // Render zone selector
+  sortedZones.forEach(zone => {
+    console.log(`${zone.name} (${zone.color})`);
+  });
+} catch (error) {
+  console.error('Failed to load zones:', error);
+}
+```
+
+---
+
+## manageZone
+
+Unified function to create, update, or delete zones.
+
+### Function Signature
+
+```javascript
+async function manageZone(
+  action: 'create' | 'update' | 'delete',
+  zoneData: ZoneData
+): Promise<ManageZoneResponse>
+```
+
+### Parameters
+
+<ParamField path="action" type="string" required>
+  Operation to perform: `'create'`, `'update'`, or `'delete'`
+</ParamField>
+
+<ParamField path="zoneData" type="object" required>
+  Zone data object with fields depending on action
+</ParamField>
+
+### Zone Data Fields
+
+<ParamField path="zoneData.id" type="string">
+  Zone ID (required for `update` and `delete`)
+</ParamField>
+
+<ParamField path="zoneData.name" type="string">
+  Zone display name (required for `create`, optional for `update`)
+</ParamField>
+
+<ParamField path="zoneData.order" type="number" optional>
+  Sort order (default: 999)
+</ParamField>
+
+<ParamField path="zoneData.desc" type="string" optional>
+  Zone description
+</ParamField>
+
+<ParamField path="zoneData.color" type="string" optional>
+  Color identifier (default: "blue")
+</ParamField>
+
+### Returns
+
+<ResponseField name="response" type="object">
+  Operation result object
+  
+  <ResponseField name="success" type="boolean">
+    Whether the operation succeeded
+  </ResponseField>
+  
+  <ResponseField name="zone" type="object" optional>
+    Created or updated zone object (for create/update actions)
+  </ResponseField>
+  
+  <ResponseField name="_local" type="boolean" optional>
+    If `true`, change was saved only to localStorage (offline mode)
+  </ResponseField>
+</ResponseField>
+
+### Behavior
+
+- Invalidates zones cache immediately
+- Sends POST request to `CONFIG.MANAGE_ZONES_URL`
+- On API failure, saves changes locally with `_local: true` flag
+- After success, refreshes localStorage with latest data
+
+---
+
+## Usage Examples
+
+### Create Zone
+
+```javascript
+import { manageZone } from './js/api/zones.js';
+
+const result = await manageZone('create', {
+  name: 'VIP Section',
+  order: 1,
+  desc: 'Premium parking area near main entrance',
+  color: 'gold'
+});
+
+if (result.success) {
+  console.log('Zone created:', result.zone);
+  if (result._local) {
+    console.warn('Zone saved locally - will sync when online');
+  }
+}
+```
+
+### Update Zone
+
+```javascript
+import { manageZone } from './js/api/zones.js';
+
+// Update zone name and description
+const result = await manageZone('update', {
+  id: 'zone_vip',
+  name: 'Executive Parking',
+  desc: 'Reserved for executives and guests'
+});
+
+if (result.success) {
+  console.log('Zone updated:', result.zone);
+}
+```
+
+### Delete Zone
+
+```javascript
+import { manageZone } from './js/api/zones.js';
+
+const result = await manageZone('delete', {
+  id: 'zone_old'
+});
+
+if (result.success) {
+  console.log('Zone deleted');
+}
+```
+
+### Complete Workflow Example
+
+```javascript
+import { fetchZones, manageZone, invalidateZonesCache } from './js/api/zones.js';
+
+// Load existing zones
+const zones = await fetchZones();
+console.log(`Current zones: ${zones.length}`);
+
+// Create new zone
+const newZone = await manageZone('create', {
+  name: 'Visitor Parking',
+  order: 10,
+  color: 'blue'
+});
+
+if (newZone.success) {
+  // Update the zone's description
+  await manageZone('update', {
+    id: newZone.zone.id,
+    desc: 'Short-term parking for visitors'
+  });
+  
+  // Force cache refresh
+  invalidateZonesCache();
+  
+  // Reload zones
+  const updatedZones = await fetchZones();
+  console.log(`Updated zones: ${updatedZones.length}`);
+}
+```
+
+---
+
+## invalidateZonesCache
+
+Manually invalidates the memory cache to force a fresh API call.
+
+### Function Signature
+
+```javascript
+function invalidateZonesCache(): void
+```
+
+### Usage Example
+
+```javascript
+import { invalidateZonesCache, fetchZones } from './js/api/zones.js';
+
+// After external update
+invalidateZonesCache();
+const freshZones = await fetchZones();
+```
+
+---
+
+## Helper Functions
+
+### Convenience Wrappers
+
+You can create convenience wrappers for cleaner code:
+
+```javascript
+import { manageZone } from './js/api/zones.js';
+
+// Create zone helper
+export async function createZone(name, order, desc, color = 'blue') {
+  return await manageZone('create', { name, order, desc, color });
+}
+
+// Update zone helper
+export async function updateZone(id, updates) {
+  return await manageZone('update', { id, ...updates });
+}
+
+// Delete zone helper
+export async function deleteZone(id) {
+  return await manageZone('delete', { id });
+}
+
+// Usage
+const result = await createZone('Guest Parking', 5, 'Visitor area');
+```
+
+---
+
+## Error Handling
+
+All operations can fail. Recommended error handling:
+
+```javascript
+import { fetchZones, manageZone } from './js/api/zones.js';
+
+// Wrap in try-catch
+try {
+  const zones = await fetchZones();
+  
+  await manageZone('create', {
+    name: 'New Zone',
+    order: 20
+  });
+} catch (error) {
+  console.error('Zone operation failed:', error.message);
+  // Show error to user
+}
+
+// Check result status
+const result = await manageZone('update', { id: 'zone_1', name: 'Updated' });
+if (!result || !result.success) {
+  console.error('Update failed');
+}
+```
+
+---
+
+## Offline Support
+
+The Zones API includes full offline support:
+
+### Read Operations
+
+- Falls back to localStorage if API is unavailable
+- Returns empty array if no cached data exists
+
+### Write Operations
+
+- Saves changes locally with `_local: true` flag
+- Changes persist until next successful API sync
+
+### Detecting Offline Changes
+
+```javascript
+import { fetchZones } from './js/api/zones.js';
+
+const zones = await fetchZones();
+const localZones = zones.filter(z => z._local);
+
+if (localZones.length > 0) {
+  console.warn(`${localZones.length} zones not synced to server`);
+  // Show sync indicator in UI
+}
+```
+
+---
+
+## Integration with Parking API
+
+Zones and parking spots are linked via `zone_id`:
+
+```javascript
+import { fetchZones } from './js/api/zones.js';
+import { fetchParkingStatus } from './js/api/parking.js';
+
+const [zones, spots] = await Promise.all([
+  fetchZones(),
+  fetchParkingStatus()
+]);
+
+// Group spots by zone
+const spotsByZone = {};
+zones.forEach(zone => {
+  spotsByZone[zone.id] = spots.filter(s => s.zone_id === zone.id);
+});
+
+// Display zone statistics
+zones.forEach(zone => {
+  const zoneSpots = spotsByZone[zone.id] || [];
+  const available = zoneSpots.filter(s => s.status === 1).length;
+  console.log(`${zone.name}: ${available}/${zoneSpots.length} available`);
+});
+```

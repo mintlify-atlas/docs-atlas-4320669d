@@ -1,0 +1,126 @@
+---
+title: "Ingest Parking Data"
+description: "Update parking spot status from IoT sensors with reservation protection logic"
+---
+
+## Overview
+
+The `ingestParkingData` endpoint receives real-time status updates from IoT sensors monitoring parking spots. It includes intelligent reservation protection logic to prevent sensor readings from overriding active reservations.
+
+## Endpoint
+
+```
+POST /ingest-parking-data
+```
+
+## Authentication
+
+This endpoint is typically called by IoT devices and should be secured with appropriate API keys or service authentication.
+
+## Request Body
+
+<ParamField path="spot_id" type="string" required>
+  The unique identifier of the parking spot (e.g., "A-01", "I-16")
+</ParamField>
+
+<ParamField path="status" type="integer" required>
+  Sensor reading status:
+  - `0`: Occupied (vehicle detected)
+  - `1`: Available (no vehicle detected)
+</ParamField>
+
+## Response
+
+<ResponseField name="message" type="string">
+  Status message indicating the result of the operation
+</ResponseField>
+
+### Success Responses
+
+- **200 OK** - Data processed successfully
+- **200 OK** - "Nuevo puesto creado" - New spot created if it didn't exist
+- **200 OK** - "Puesto reservado, esperando llegada del auto" - Reserved spot protected
+- **200 OK** - "Reserva completada. Puesto ahora ocupado" - Reservation fulfilled
+
+### Error Responses
+
+- **400 Bad Request** - Missing required parameters `spot_id` or `status`
+- **500 Internal Server Error** - Database or server error
+
+## Reservation Protection Logic
+
+The function implements three critical scenarios:
+
+### Case 1: Reserved Spot, Sensor Says Available
+**Current Status**: `2` (Reserved) | **Sensor Reading**: `1` (Available)
+
+**Action**: Ignore sensor reading and maintain reservation. This protects the reservation while waiting for the vehicle to arrive.
+
+### Case 2: Reserved Spot, Sensor Says Occupied
+**Current Status**: `2` (Reserved) | **Sensor Reading**: `0` (Occupied)
+
+**Action**: Confirm reservation fulfilled. Update status to `0` (Occupied) and delete reservation metadata.
+
+### Case 3: Normal Operation
+**No Active Reservation**
+
+**Action**: Update status based on sensor reading and record timestamp.
+
+## Code Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/ingest-parking-data \
+  -H "Content-Type: application/json" \
+  -d '{
+    "spot_id": "A-01",
+    "status": 0
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/ingest-parking-data',
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      spot_id: 'A-01',
+      status: 0
+    })
+  }
+);
+
+const result = await response.text();
+console.log(result);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/ingest-parking-data',
+    json={
+        'spot_id': 'A-01',
+        'status': 0
+    }
+)
+
+print(response.text)
+```
+
+</CodeGroup>
+
+## Implementation Details
+
+- **Auto-creation**: If a spot doesn't exist, it's automatically created with the provided status
+- **Timestamp tracking**: Every status change updates the `last_changed` field with server timestamp
+- **Transaction safety**: Uses Firestore document operations to ensure data consistency
+- **Reservation cleanup**: When a reservation is fulfilled (case 2), the `reservation_data` field is deleted to save storage
+
+## Related Endpoints
+
+- [Reserve Parking Spot](/api/reserve-parking-spot) - Create a reservation
+- [Release Parking Spot](/api/release-parking-spot) - Cancel a reservation
+- [Get Parking Status](/api/get-parking-status) - Retrieve current status of all spots

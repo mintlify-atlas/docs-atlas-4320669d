@@ -1,0 +1,362 @@
+---
+title: "Get Occupancy History"
+description: "Retrieve hourly parking occupancy snapshots for analytics"
+---
+
+## Overview
+
+The `getOccupancyHistory` endpoint retrieves historical hourly snapshots of parking occupancy data. It supports time range filtering and optional zone-specific queries for detailed analytics.
+
+## Endpoint
+
+```
+GET /get-occupancy-history
+```
+
+## Authentication
+
+CORS-enabled endpoint with wildcard origin (`*`). No authentication required for read access.
+
+## Query Parameters
+
+<ParamField query="days" type="integer" default="1">
+  Number of days of history to retrieve. Valid range: 1-30. Values outside this range are clamped.
+</ParamField>
+
+<ParamField query="zoneId" type="string">
+  Optional zone ID to filter results (e.g., "zone_1764307623391"). If provided, returns detailed zone-specific data. If omitted, returns summary for all zones.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Always `true` for successful requests
+</ResponseField>
+
+<ResponseField name="days" type="integer">
+  Actual number of days returned (after clamping 1-30)
+</ResponseField>
+
+<ResponseField name="zoneId" type="string">
+  The zone ID filter applied, or `null` if showing all zones
+</ResponseField>
+
+<ResponseField name="count" type="integer">
+  Number of hourly snapshots returned
+</ResponseField>
+
+<ResponseField name="from" type="string">
+  ISO 8601 timestamp of the start of the time range
+</ResponseField>
+
+<ResponseField name="to" type="string">
+  ISO 8601 timestamp of the end of the time range
+</ResponseField>
+
+<ResponseField name="samples" type="array">
+  Array of hourly snapshot objects
+</ResponseField>
+
+<ResponseField name="samples[].hour_key" type="string">
+  Unique hour identifier in format `YYYY-MM-DD-HH` (UTC)
+</ResponseField>
+
+<ResponseField name="samples[].ts" type="integer">
+  Unix timestamp in milliseconds
+</ResponseField>
+
+<ResponseField name="samples[].global" type="object">
+  Global parking statistics across all zones:
+  - `free`: Number of available spots
+  - `occupied`: Number of occupied spots
+  - `reserved`: Number of reserved spots
+  - `total`: Total number of spots
+  - `occupancyPct`: Occupancy percentage (0-100)
+</ResponseField>
+
+<ResponseField name="samples[].zone" type="object">
+  Zone-specific statistics (only present when `zoneId` parameter is provided)
+</ResponseField>
+
+<ResponseField name="samples[].zones_summary" type="array">
+  Summary array of all zones (only present when `zoneId` is NOT provided). Each element contains:
+  - `id`: Zone identifier
+  - `occupancyPct`: Occupancy percentage
+  - `free`: Available spots
+  - `occupied`: Occupied spots
+  - `reserved`: Reserved spots
+  - `total`: Total spots
+</ResponseField>
+
+### Success Response
+
+- **200 OK** - Returns occupancy history data
+- **204 No Content** - OPTIONS preflight response
+
+### Error Responses
+
+- **405 Method Not Allowed** - Request method is not GET
+- **500 Internal Server Error** - Database or server error
+
+## Code Examples
+
+### Get Last 7 Days (All Zones)
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET "https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-occupancy-history?days=7"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-occupancy-history?days=7'
+);
+
+const data = await response.json();
+
+console.log(`Retrieved ${data.count} hourly snapshots`);
+console.log(`Time range: ${data.from} to ${data.to}`);
+
+data.samples.forEach(sample => {
+  console.log(`${sample.hour_key}: ${sample.global.occupancyPct}% occupied`);
+});
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-occupancy-history',
+    params={'days': 7}
+)
+
+data = response.json()
+
+print(f"Retrieved {data['count']} hourly snapshots")
+print(f"Time range: {data['from']} to {data['to']}")
+
+for sample in data['samples']:
+    print(f"{sample['hour_key']}: {sample['global']['occupancyPct']}% occupied")
+```
+
+</CodeGroup>
+
+### Get Zone-Specific Data
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET "https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-occupancy-history?days=3&zoneId=zone_1764307623391"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-occupancy-history?days=3&zoneId=zone_1764307623391'
+);
+
+const data = await response.json();
+
+console.log(`Zone: ${data.zoneId}`);
+
+data.samples.forEach(sample => {
+  if (sample.zone) {
+    console.log(`${sample.hour_key}: ${sample.zone.free}/${sample.zone.total} available`);
+  }
+});
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/get-occupancy-history',
+    params={
+        'days': 3,
+        'zoneId': 'zone_1764307623391'
+    }
+)
+
+data = response.json()
+
+print(f"Zone: {data['zoneId']}")
+
+for sample in data['samples']:
+    if sample.get('zone'):
+        zone = sample['zone']
+        print(f"{sample['hour_key']}: {zone['free']}/{zone['total']} available")
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### All Zones Summary
+
+```json
+{
+  "success": true,
+  "days": 1,
+  "zoneId": null,
+  "count": 24,
+  "from": "2026-03-04T10:00:00.000Z",
+  "to": "2026-03-05T10:00:00.000Z",
+  "samples": [
+    {
+      "hour_key": "2026-03-04-10",
+      "ts": 1709550000000,
+      "global": {
+        "free": 12,
+        "occupied": 20,
+        "reserved": 4,
+        "total": 36,
+        "occupancyPct": 67
+      },
+      "zones_summary": [
+        {
+          "id": "zone_1764307623391",
+          "occupancyPct": 70,
+          "free": 6,
+          "occupied": 12,
+          "reserved": 2,
+          "total": 20
+        },
+        {
+          "id": "zone_1764306251630",
+          "occupancyPct": 63,
+          "free": 6,
+          "occupied": 8,
+          "reserved": 2,
+          "total": 16
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Single Zone Detail
+
+```json
+{
+  "success": true,
+  "days": 1,
+  "zoneId": "zone_1764307623391",
+  "count": 24,
+  "from": "2026-03-04T10:00:00.000Z",
+  "to": "2026-03-05T10:00:00.000Z",
+  "samples": [
+    {
+      "hour_key": "2026-03-04-10",
+      "ts": 1709550000000,
+      "global": {
+        "free": 12,
+        "occupied": 20,
+        "reserved": 4,
+        "total": 36,
+        "occupancyPct": 67
+      },
+      "zone": {
+        "free": 6,
+        "occupied": 12,
+        "reserved": 2,
+        "total": 20,
+        "occupancyPct": 70
+      }
+    }
+  ]
+}
+```
+
+## Data Visualization Examples
+
+### Chart.js Line Graph
+
+```javascript
+const response = await fetch('/get-occupancy-history?days=7');
+const data = await response.json();
+
+const chartData = {
+  labels: data.samples.map(s => s.hour_key),
+  datasets: [{
+    label: 'Occupancy %',
+    data: data.samples.map(s => s.global.occupancyPct),
+    borderColor: 'rgb(75, 192, 192)',
+    tension: 0.1
+  }]
+};
+
+new Chart(ctx, {
+  type: 'line',
+  data: chartData,
+  options: {
+    scales: {
+      y: {
+        min: 0,
+        max: 100,
+        title: { display: true, text: 'Occupancy %' }
+      }
+    }
+  }
+});
+```
+
+### Peak Hours Analysis
+
+```javascript
+const response = await fetch('/get-occupancy-history?days=7');
+const data = await response.json();
+
+// Group by hour of day (0-23)
+const hourlyStats = {};
+data.samples.forEach(sample => {
+  const hour = new Date(sample.ts).getUTCHours();
+  if (!hourlyStats[hour]) {
+    hourlyStats[hour] = { total: 0, count: 0 };
+  }
+  hourlyStats[hour].total += sample.global.occupancyPct;
+  hourlyStats[hour].count += 1;
+});
+
+// Find peak hour
+let peakHour = 0;
+let peakOccupancy = 0;
+
+for (let hour = 0; hour < 24; hour++) {
+  if (hourlyStats[hour]) {
+    const avg = hourlyStats[hour].total / hourlyStats[hour].count;
+    if (avg > peakOccupancy) {
+      peakOccupancy = avg;
+      peakHour = hour;
+    }
+  }
+}
+
+console.log(`Peak hour: ${peakHour}:00 UTC with ${peakOccupancy.toFixed(1)}% average occupancy`);
+```
+
+## Time Range Clamping
+
+The `days` parameter is validated and clamped:
+
+```javascript
+const daysParam = parseInt(req.query.days || '1', 10);
+const days = isNaN(daysParam) ? 1 : Math.min(Math.max(daysParam, 1), 30);
+```
+
+Examples:
+- `days=0` → Returns 1 day
+- `days=45` → Returns 30 days (max)
+- `days=invalid` → Returns 1 day (default)
+
+## Performance Considerations
+
+- **Indexed Query**: Uses Firestore index on `ts` field for efficient time-based queries
+- **Payload Optimization**: Zone summary excludes spot-level details to reduce response size
+- **Retention Policy**: Historical data is automatically cleaned by [Save Hourly Snapshot](/api/save-hourly-snapshot) after 30 days
+
+## Related Endpoints
+
+- [Save Hourly Snapshot](/api/save-hourly-snapshot) - Create occupancy snapshots (called by Cloud Scheduler)
+- [Get Zones](/api/get-zones) - Fetch zone metadata
+- [Get Parking Status](/api/get-parking-status) - Real-time status vs historical data

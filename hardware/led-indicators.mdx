@@ -1,0 +1,450 @@
+---
+title: LED Indicators
+description: RGB LED wiring, color states, and common anode logic for parking space indicators
+---
+
+The S-Parking system uses RGB LEDs to provide visual feedback about parking space status. This guide covers wiring, color states, and the inverted logic required for common anode LEDs.
+
+## RGB LED Overview
+
+The system uses a **common anode RGB LED**, which has special wiring and logic requirements:
+
+- **Common Anode**: The longest pin connects to **3.3V** (positive voltage)
+- **Three Cathodes**: Separate pins for Red, Green, and Blue connect to GPIO pins
+- **Inverted Logic**: `LOW` turns LED **ON**, `HIGH` turns LED **OFF**
+
+### Why Common Anode?
+
+Common anode LEDs are used because:
+- Can drive higher brightness with GPIO sinking current
+- More stable voltage reference (tied to 3.3V rail)
+- Better compatibility with ESP32 output characteristics
+
+## Wiring Diagram
+
+### Pin Connections
+
+```
+        RGB LED (Common Anode)
+        
+           [Longest Pin] ─────► 3.3V (Power)
+                 │
+        ┌────────┼────────┐
+        │        │        │
+     [Red]   [Green]  [Blue]
+        │        │        │
+        │        │        └──► GPIO 14 (LED_BLUE_PIN)
+        │        └───────────► GPIO 12 (LED_GREEN_PIN)
+        └────────────────────► GPIO 13 (LED_RED_PIN)
+```
+
+### Component List
+
+- **RGB LED**: Common anode type (4-pin)
+- **Resistors**: 220Ω - 330Ω for each color channel
+- **Jumper wires**: To connect ESP32 to breadboard
+
+<Warning>
+  **Always use current-limiting resistors!** Connecting LEDs directly to GPIO pins without resistors can damage both the LED and the ESP32.
+  
+  Recommended: **220Ω** resistors for each color channel
+</Warning>
+
+## Pin Configuration
+
+From `S-Parking.ino:9-11`, the default GPIO pins are:
+
+```cpp
+#define LED_RED_PIN 13
+#define LED_GREEN_PIN 12
+#define LED_BLUE_PIN 14
+```
+
+<ParamField path="LED_RED_PIN" type="GPIO" default="13">
+  GPIO pin for red LED channel. Active LOW (0V = ON).
+</ParamField>
+
+<ParamField path="LED_GREEN_PIN" type="GPIO" default="12">
+  GPIO pin for green LED channel. Active LOW (0V = ON).
+</ParamField>
+
+<ParamField path="LED_BLUE_PIN" type="GPIO" default="14">
+  GPIO pin for blue LED channel. Reserved for future use. Amber is created using red + green.
+</ParamField>
+
+### Alternative GPIO Pins
+
+If you need to use different pins, you can safely reassign to these ESP32 GPIOs:
+
+**Safe GPIO pins for output:**
+- GPIO 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33
+
+**Avoid these pins:**
+- GPIO 0, 1, 3 (boot and serial)
+- GPIO 6-11 (connected to flash)
+- GPIO 34-39 (input-only, no output capability)
+
+## Setup and Initialization
+
+The firmware initializes LED pins in `setup()` from `S-Parking.ino:36-40`:
+
+```cpp
+void setup() {
+  Serial.begin(115200);
+  
+  // Configure LED pins as outputs
+  pinMode(LED_RED_PIN, OUTPUT);
+  pinMode(LED_GREEN_PIN, OUTPUT);
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  setColor(0, 0, 0); // Turn off all LEDs initially
+  
+  // ... sensor and WiFi initialization
+}
+```
+
+## Color States
+
+The system uses three distinct colors to indicate parking space status:
+
+### Red - Space Occupied
+
+**Meaning**: A vehicle is physically present in the space
+
+**Priority**: Highest (overrides all other states)
+
+```cpp
+setColor(1, 0, 0); // Red LED ON
+```
+
+**When activated:**
+- Sensor detects distance < 400mm (or your calibrated threshold)
+- Immediate response (within 500ms of car entering)
+- State sent to cloud immediately
+
+### Green - Space Available
+
+**Meaning**: Space is empty and not reserved
+
+**Priority**: Lowest (default state)
+
+```cpp
+setColor(0, 1, 0); // Green LED ON
+```
+
+**When activated:**
+- No vehicle detected by sensor
+- Cloud status shows available (status = 1)
+- No active reservation
+
+### Amber - Space Reserved
+
+**Meaning**: Space is reserved but not yet occupied
+
+**Priority**: Medium (shown when no physical car present)
+
+**Created by mixing red + green:**
+
+```cpp
+setColor(1, 1, 0); // Red + Green = Amber
+```
+
+**When activated:**
+- No vehicle detected by sensor
+- Cloud status shows reserved (status = 2)
+- User has active reservation but hasn't arrived yet
+
+<Warning>
+  Amber is achieved by turning on **both red and green** simultaneously. The blue pin is not used for amber color.
+</Warning>
+
+## Common Anode Logic
+
+The `setColor()` function handles the inverted logic required for common anode LEDs from `S-Parking.ino:196-203`:
+
+```cpp
+void setColor(int red, int green, int blue) {
+  // Invert logic for Common Anode:
+  // 1 (On) -> Write LOW
+  // 0 (Off) -> Write HIGH
+  digitalWrite(LED_RED_PIN, red ? LOW : HIGH);
+  digitalWrite(LED_GREEN_PIN, green ? LOW : HIGH);
+  digitalWrite(LED_BLUE_PIN, blue ? LOW : HIGH);
+}
+```
+
+### Understanding the Inversion
+
+**Common Anode Wiring:**
+- **Anode** (long pin) → Connected to +3.3V
+- **Cathodes** (R/G/B pins) → Connected to GPIO pins
+- **Current flows** from anode to cathode
+
+**Logic:**
+- To turn LED **ON**: GPIO must be LOW (0V) → Creates voltage difference → Current flows
+- To turn LED **OFF**: GPIO must be HIGH (3.3V) → No voltage difference → No current
+
+**Example:**
+```cpp
+setColor(1, 0, 0); // Request: Red ON, Green OFF, Blue OFF
+// Internally converts to:
+digitalWrite(LED_RED_PIN, LOW);   // 0V → Red ON
+digitalWrite(LED_GREEN_PIN, HIGH); // 3.3V → Green OFF
+digitalWrite(LED_BLUE_PIN, HIGH);  // 3.3V → Blue OFF
+```
+
+### Common Cathode Alternative
+
+If you're using a **common cathode** LED instead:
+
+- Connect **cathode** (long pin) to **GND**
+- Logic is **NOT inverted**: `HIGH` = ON, `LOW` = OFF
+- Modify `setColor()` function:
+
+```cpp
+void setColor(int red, int green, int blue) {
+  // Direct logic for Common Cathode (no inversion needed)
+  digitalWrite(LED_RED_PIN, red ? HIGH : LOW);
+  digitalWrite(LED_GREEN_PIN, green ? HIGH : LOW);
+  digitalWrite(LED_BLUE_PIN, blue ? LOW : HIGH);
+}
+```
+
+## State Priority Logic
+
+The LED update logic follows a strict priority hierarchy from `S-Parking.ino:173-191`:
+
+```cpp
+void updateLEDs() {
+  // PRIORITY 1: Physical car presence (highest)
+  if (estadoLocalSensor == 0) {
+    setColor(1, 0, 0); // Red - Occupied
+    return;
+  }
+
+  // PRIORITY 2: Reservation status (medium)
+  if (estadoNube == 2) {
+    setColor(1, 1, 0); // Amber - Reserved
+    return;
+  }
+
+  // PRIORITY 3: Available (default/lowest)
+  setColor(0, 1, 0); // Green - Available
+}
+```
+
+### Priority Explanation
+
+<Steps>
+  <Step title="Priority 1: Physical Sensor">
+    **Red always wins** if the sensor detects a car.
+    
+    Even if cloud shows "available" or "reserved", the physical presence overrides everything. This ensures accurate real-time feedback.
+    
+    **Example:** User parks without reservation → Immediate red light
+  </Step>
+  
+  <Step title="Priority 2: Cloud Reservation">
+    **Amber shows** when space is reserved but empty.
+    
+    Only applies when sensor shows no car. Alerts other drivers that space is claimed.
+    
+    **Example:** User reserves spot 10 minutes in advance → Amber light until they arrive
+  </Step>
+  
+  <Step title="Priority 3: Default Available">
+    **Green shows** when nothing else applies.
+    
+    No car detected, no reservation active.
+    
+    **Example:** Normal empty parking space → Green light
+  </Step>
+</Steps>
+
+## Self-Healing & Synchronization
+
+The LED state automatically corrects itself if cloud and local sensor disagree. From `S-Parking.ino:120-136`:
+
+```cpp
+// CASE A: Local shows available (1), Cloud shows occupied (0)
+// Meaning: Exit message was lost
+if (estadoLocalSensor == 1 && estadoNube == 0) {
+  Serial.println("Desynchronization detected! Forcing update to AVAILABLE...");
+  sendStateToCloud(1);
+}
+
+// CASE B: Local shows occupied (0), Cloud shows available/reserved (1 or 2)
+// Meaning: Entry message was lost
+if (estadoLocalSensor == 0 && (estadoNube == 1 || estadoNube == 2)) {
+  Serial.println("Desynchronization detected! Forcing update to OCCUPIED...");
+  sendStateToCloud(0);
+}
+```
+
+**This ensures:**
+- Lost messages are automatically retried
+- LED always reflects true state within 15 seconds
+- No manual intervention needed
+- System self-corrects network glitches
+
+## Testing LED Functionality
+
+<Steps>
+  <Step title="Visual Inspection">
+    Power on the ESP32 and verify:
+    
+    - All three colors can light individually
+    - No flickering or dim lights (check resistor values)
+    - Colors are correct (not swapped pins)
+    - Amber is actually amber (not orange or yellow)
+  </Step>
+  
+  <Step title="State Transitions">
+    Test all state changes:
+    
+    1. **Boot → Green**: System starts with green LED
+    2. **Green → Red**: Place hand over sensor, LED turns red immediately
+    3. **Red → Green**: Remove hand, LED turns green within 1 second
+    4. **Green → Amber**: Create reservation via app, LED turns amber within 15 seconds
+    5. **Amber → Red**: Park car while reserved, LED turns red immediately
+  </Step>
+  
+  <Step title="Serial Monitor Debug">
+    Watch Serial Monitor (115200 baud) for state changes:
+    
+    ```
+    Cambio físico detectado: 0
+    Enviado a ingest. Codigo: 200
+    Sincronizando. Local: 0 | Nube: 0
+    ```
+    
+    LED changes should correlate with serial output.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="LED doesn't light up">
+    **Possible causes:**
+    - Wrong LED type (common cathode instead of anode)
+    - Reversed polarity
+    - Missing resistors causing overcurrent protection
+    - Bad connection or wrong GPIO pin
+    
+    **Solutions:**
+    - Verify LED type (measure with multimeter)
+    - Check resistors are in place (220Ω each)
+    - Test GPIO pins individually with `digitalWrite(pin, LOW)`
+    - Verify wiring matches pin definitions
+  </Accordion>
+  
+  <Accordion title="Wrong colors showing">
+    **Possible causes:**
+    - Swapped wire connections
+    - Wrong pin definitions in code
+    - RGB LED has different pinout than expected
+    
+    **Solutions:**
+    - Verify LED pinout (datasheet or test each pin)
+    - Swap pin definitions in code to match actual wiring
+    - Test each color individually with manual `setColor()` calls
+  </Accordion>
+  
+  <Accordion title="LED is very dim">
+    **Possible causes:**
+    - Resistors too high (>330Ω)
+    - Power supply insufficient
+    - Wrong logic (common cathode code on common anode LED)
+    
+    **Solutions:**
+    - Use 220Ω resistors for brighter output
+    - Power ESP32 from USB 3.0 port or powered hub
+    - Verify `setColor()` logic matches LED type
+  </Accordion>
+  
+  <Accordion title="LED flickers randomly">
+    **Possible causes:**
+    - Loose connections
+    - Power supply noise
+    - GPIO conflict with other peripherals
+    
+    **Solutions:**
+    - Secure all connections (solder if possible)
+    - Add decoupling capacitor (100µF) near LED
+    - Move to different GPIO pins if conflict exists
+  </Accordion>
+  
+  <Accordion title="Amber looks too red or too green">
+    **Possible causes:**
+    - Unbalanced resistor values
+    - LED characteristics (red/green have different brightness)
+    
+    **Solutions:**
+    - Use higher resistor on brighter color (e.g., 330Ω on green, 220Ω on red)
+    - Use PWM for precise color mixing (advanced)
+    - Accept slight color variation (most LEDs have natural differences)
+  </Accordion>
+</AccordionGroup>
+
+## Breadboard Wiring Example
+
+For prototyping, here's the complete wiring:
+
+```
+ESP32 Pin   →  Resistor  →  LED Pin
+─────────────────────────────────────
+GPIO 13     →  220Ω      →  Red cathode
+GPIO 12     →  220Ω      →  Green cathode
+GPIO 14     →  220Ω      →  Blue cathode
+3.3V        →  (direct)  →  Anode (longest pin)
+GND         →  (direct)  →  ESP32 ground reference
+```
+
+<Warning>
+  Double-check polarity before powering on! Reversed LEDs can be permanently damaged.
+</Warning>
+
+## Advanced: PWM Brightness Control
+
+For variable brightness or precise color mixing, you can use PWM (Pulse Width Modulation):
+
+```cpp
+// Use PWM channels (ESP32 has 16 channels)
+const int PWM_FREQ = 5000;
+const int PWM_RESOLUTION = 8; // 0-255
+
+void setup() {
+  // Attach PWM channels to pins
+  ledcSetup(0, PWM_FREQ, PWM_RESOLUTION); // Red channel
+  ledcSetup(1, PWM_FREQ, PWM_RESOLUTION); // Green channel
+  ledcSetup(2, PWM_FREQ, PWM_RESOLUTION); // Blue channel
+  
+  ledcAttachPin(LED_RED_PIN, 0);
+  ledcAttachPin(LED_GREEN_PIN, 1);
+  ledcAttachPin(LED_BLUE_PIN, 2);
+}
+
+void setColorPWM(int red, int green, int blue) {
+  // For common anode, invert values: 255 - value
+  ledcWrite(0, 255 - red);   // Red brightness (0-255)
+  ledcWrite(1, 255 - green); // Green brightness (0-255)
+  ledcWrite(2, 255 - blue);  // Blue brightness (0-255)
+}
+
+// Example: 50% brightness red
+setColorPWM(128, 0, 0);
+```
+
+This allows dimming or creating custom colors beyond the basic red/green/amber.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Sensor Calibration" icon="ruler" href="/hardware/sensor-calibration">
+    Calibrate VL53L0X sensor thresholds
+  </Card>
+  
+  <Card title="ESP32 Setup" icon="microchip" href="/hardware/esp32-setup">
+    Configure WiFi and flash firmware
+  </Card>
+</CardGroup>
